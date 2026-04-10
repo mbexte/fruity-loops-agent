@@ -1,0 +1,65 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+# Virtual environment
+.venv/
+venv/
+ENV/
+env/
+
+# Distribution / packaging
+build/
+dist/
+.eggs/
+*.egg-info/
+*.egg
+
+# IDEs and editors
+.vscode/*
+!.vscode/launch.json
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Environment variables
+.env
+.env.*
+
+# Logs and databases
+*.log
+*.sqlite3
+*.db
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Python cache
+.pytest_cache/
+.pyre/
+.mypy_cache/
+
+# OpenAI/OpenRouter local state
+.claude/
+
+# MIDI / audio output
+*.mid
+*.wav
+*.mp3
+
+# Local runtime files
+*.pid
+*.pid.lock
+
+# Backup files
+*~
+*.swp
+*.swo

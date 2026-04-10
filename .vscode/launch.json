@@ -1,0 +1,24 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Music API Server",
+            "type": "python",
+            "request": "launch",
+            "module": "uvicorn",
+            "args": [
+                "music_api:app",
+                "--reload",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "8000"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "env": {
+                "OPENROUTER_API_KEY": "${env:OPENROUTER_API_KEY}"
+            }
+        }
+    ]
+}
