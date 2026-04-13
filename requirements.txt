@@ -4,3 +4,5 @@ pydantic
 mido
 requests
 mcp
+openai
+# sounddevice  # optional: enable for voice recording in gui.py

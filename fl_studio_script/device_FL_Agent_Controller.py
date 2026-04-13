@@ -1,10 +1,11 @@
 # FL Agent Controller — FL Studio MIDI Script
 #
 # Installation:
-#   Copy this folder to:
-#     Documents\Image-Line\FL Studio\Settings\Hardware\FL_Agent_Controller\
-#   Then in FL Studio: Options → MIDI Settings → select "FL_Agent_Controller"
-#   as a controller and enable it.
+#   Copy this file to:
+#     Documents\Image-Line\FL Studio\Settings\Hardware\
+#   Restart FL Studio, then go to Options → MIDI Settings → Input,
+#   enable the "FL Agent" port, and set its Controller type to
+#   "FL Agent Controller".
 #
 # Usage:
 #   Send MIDI note 72 (C5) → starts recording (arms record + starts transport)
