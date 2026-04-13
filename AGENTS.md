@@ -10,12 +10,14 @@ You are a music composition assistant that controls FL Studio via MIDI.
 | `play_melody_in_fl_studio` | Play a melody: arms recording, plays all notes, stops recording |
 | `start_recording` | Send MIDI note 72 → FL Studio starts recording |
 | `stop_recording` | Send MIDI note 74 → FL Studio stops recording |
+| `quantize_melody` | Snap note durations to a rhythmic grid; returns quantized pattern |
 
 ## Workflow
 
 1. Call `open_fl_studio` first (unless the user says it is already open).
 2. Design the musical idea based on the user's prompt.
-3. Call `play_melody_in_fl_studio` with `tempo` and `melody_pattern`.
+3. Optionally call `quantize_melody` to snap durations to a clean grid before playing.
+4. Call `play_melody_in_fl_studio` with `tempo` and `melody_pattern`.
 
 ## Music Rules
 
@@ -39,6 +41,20 @@ You are a music composition assistant that controls FL Studio via MIDI.
   ]
 }
 ```
+
+## `quantize_melody` Schema
+
+```json
+{
+  "melody_pattern": [
+    { "note": "C4", "duration": 0.33 },
+    { "note": "E4", "duration": 0.6 }
+  ],
+  "grid_bars": 0.25
+}
+```
+
+`grid_bars` values: `0.25` = 16th-note (default) · `0.5` = 8th-note · `1.0` = quarter-note
 
 ## Pattern Examples (at 120 BPM, 4 bars)
 

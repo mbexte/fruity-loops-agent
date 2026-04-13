@@ -54,6 +54,44 @@ def normalize_duration_bars(duration: float) -> float:
     return max(0.5, round(nearest, 6))
 
 
+def quantize_melody_pattern(pattern, grid_bars: float = 0.25) -> list:
+    """Snap each note duration to the nearest multiple of grid_bars.
+
+    grid_bars common values:
+      0.25  → 16th-note grid  (quarter bar)
+      0.5   → 8th-note grid   (half bar)
+      1.0   → quarter-note grid (full bar)
+
+    Durations are rounded to the nearest grid multiple, with a minimum of
+    one grid step. The last note is lengthened or shortened to make the
+    total duration an integer multiple of grid_bars.
+    """
+    if grid_bars <= 0:
+        grid_bars = 0.25
+
+    quantized = []
+    for note_obj in pattern:
+        if isinstance(note_obj, dict):
+            note_name = note_obj.get("note")
+            duration_bars = float(note_obj.get("duration", grid_bars))
+        else:
+            note_name = note_obj.note
+            duration_bars = float(note_obj.duration)
+
+        steps = max(1, round(duration_bars / grid_bars))
+        quantized.append({"note": note_name, "duration": round(steps * grid_bars, 6)})
+
+    # Align total length to the next integer multiple of grid_bars
+    total = sum(n["duration"] for n in quantized)
+    target = round(max(grid_bars, round(total / grid_bars) * grid_bars), 6)
+    if quantized and abs(total - target) > 1e-9:
+        quantized[-1]["duration"] = round(
+            max(grid_bars, quantized[-1]["duration"] + (target - total)), 6
+        )
+
+    return quantized
+
+
 def normalize_melody_pattern(pattern, target_bars: float = 4.0):
     notes = []
     for note_obj in pattern:

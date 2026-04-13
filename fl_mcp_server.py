@@ -24,7 +24,7 @@ from mcp.server.stdio import stdio_server
 # Make sure fl_transport and music_api are importable from the same directory.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fl_transport
-from music_api import note_to_midi, sanitize_midi_notes, normalize_melody_pattern
+from music_api import note_to_midi, sanitize_midi_notes, normalize_melody_pattern, quantize_melody_pattern
 
 # ---------------------------------------------------------------------------
 # FL Studio discovery
@@ -125,6 +125,46 @@ async def list_tools() -> list[types.Tool]:
             description="Send MIDI note 74 (D5) to FL Studio to stop recording.",
             inputSchema={"type": "object", "properties": {}},
         ),
+        types.Tool(
+            name="quantize_melody",
+            description=(
+                "Snap note durations in a melody pattern to the nearest rhythmic grid. "
+                "Returns the quantized pattern ready to pass to play_melody_in_fl_studio."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "melody_pattern": {
+                        "type": "array",
+                        "description": "List of note objects with 'note' and 'duration' (in bars).",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "note": {
+                                    "oneOf": [
+                                        {"type": "string"},
+                                        {"type": "array", "items": {"type": "string"}},
+                                    ]
+                                },
+                                "duration": {"type": "number"},
+                            },
+                            "required": ["note", "duration"],
+                        },
+                    },
+                    "grid_bars": {
+                        "type": "number",
+                        "description": (
+                            "Grid resolution in bars. "
+                            "0.25 = 16th-note grid (default), "
+                            "0.5 = 8th-note grid, "
+                            "1.0 = quarter-note grid."
+                        ),
+                        "default": 0.25,
+                    },
+                },
+                "required": ["melody_pattern"],
+            },
+        ),
     ]
 
 
@@ -201,6 +241,16 @@ async def call_tool(
             return [types.TextContent(type="text", text="Recording stopped.")]
         except Exception as exc:
             return [types.TextContent(type="text", text=f"ERROR: {exc}")]
+
+    elif name == "quantize_melody":
+        raw_pattern = arguments.get("melody_pattern", [])
+        grid_bars = float(arguments.get("grid_bars", 0.25))
+        quantized = quantize_melody_pattern(raw_pattern, grid_bars=grid_bars)
+        import json
+        return [types.TextContent(
+            type="text",
+            text=json.dumps({"grid_bars": grid_bars, "melody_pattern": quantized}, indent=2),
+        )]
 
     return [types.TextContent(type="text", text=f"Unknown tool: {name}")]
 
