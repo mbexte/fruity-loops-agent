@@ -14,7 +14,7 @@ client = OpenAI(
     api_key=_api_key,
 ) if _api_key else None
 
-MODEL = "openai/gpt-4o"
+MODEL = "openai/gpt-5.4-mini"
 
 def note_to_midi(note_str: str) -> int:
     """Convert note string like 'C4' or 'Bb3' to MIDI number."""
@@ -30,7 +30,8 @@ def note_to_midi(note_str: str) -> int:
     octave = int(octave_str)
     return note_map[note] + (octave + 1) * 12
 
-STANDARD_BARS = [4.0, 3.0, 2.0, 1.5, 1.0, 0.75, 0.5]
+BAR_GRID = 0.0625
+MIN_DURATION_BARS = BAR_GRID
 RESERVED_MIDI_NOTES = {72, 74}
 
 
@@ -45,29 +46,30 @@ def sanitize_midi_notes(notes):
 
 def normalize_duration_bars(duration: float) -> float:
     if duration <= 0:
-        return 0.5
-    rounded = round(duration, 6)
-    if rounded < 0.5:
-        return 0.5
-    candidates = STANDARD_BARS + [rounded]
-    nearest = min(candidates, key=lambda x: abs(x - rounded))
-    return max(0.5, round(nearest, 6))
+        return MIN_DURATION_BARS
+    rounded = round(float(duration) / BAR_GRID) * BAR_GRID
+    if rounded < MIN_DURATION_BARS:
+        return MIN_DURATION_BARS
+    return round(rounded, 6)
 
 
-def quantize_melody_pattern(pattern, grid_bars: float = 0.25) -> list:
+def quantize_melody_pattern(pattern, grid_bars: float = BAR_GRID) -> list:
     """Snap each note duration to the nearest multiple of grid_bars.
 
-    grid_bars common values:
-      0.25  → 16th-note grid  (quarter bar)
-      0.5   → 8th-note grid   (half bar)
-      1.0   → quarter-note grid (full bar)
+    Durations are measured in bars.
+    Common grid values:
+      0.0625 -> 16th-note grid (1/16 bar)
+      0.125  -> 8th-note grid (1/8 bar)
+      0.25   -> quarter-note grid (1/4 bar)
+      0.5    -> half-note grid (1/2 bar)
+      1.0    -> whole-note / full-bar grid
 
     Durations are rounded to the nearest grid multiple, with a minimum of
-    one grid step. The last note is lengthened or shortened to make the
-    total duration an integer multiple of grid_bars.
+    one grid step. The last note is adjusted so the total duration stays
+    on the grid.
     """
     if grid_bars <= 0:
-        grid_bars = 0.25
+        grid_bars = BAR_GRID
 
     quantized = []
     for note_obj in pattern:
@@ -97,7 +99,7 @@ def normalize_melody_pattern(pattern, target_bars: float = 4.0):
     for note_obj in pattern:
         if isinstance(note_obj, dict):
             note_name = note_obj.get('note')
-            duration_bars = float(note_obj.get('duration', 0.25))
+            duration_bars = float(note_obj.get('duration', BAR_GRID))
         else:
             note_name = note_obj.note
             duration_bars = float(note_obj.duration)
@@ -181,8 +183,8 @@ def prompt_to_intent(prompt: MusicPrompt):
                         "Choose appropriate tempo (BPM), key (e.g. C, F#), scale (e.g. major, minor, dorian), "
                         "instruments, and a melody_pattern as a list of note objects. "
                         "Each note object must include a note name (e.g. C4, D#4, F5) or a chord as a list of note names, plus a duration in bars. "
-                        "All music must be in 4/4 time. Use 1.0 to represent one full 4/4 bar, 0.75 for dotted half notes, and 0.5 for half notes. "
-                        "Do not use durations smaller than 0.5 bars. The total bar duration should form valid 4/4 measures. If you generate 4 bars, the total duration must equal exactly 4.0 bars. "
+                        "All music must be in 4/4 time. Durations are bar fractions: 1.0 = one full bar, 0.5 = half note, 0.25 = quarter note, 0.125 = eighth note, 0.0625 = sixteenth note. "
+                        "Do not use durations smaller than 0.0625 bars. The total bar duration should form valid 4/4 measures. If you generate 4 bars, the total duration must equal exactly 4.0 bars. "
                         "Do not use seconds to describe note lengths. Only emit durations in bars. "
                         "Avoid using C5 or D5, because those notes are reserved for recording start and stop control. "
                         "It is allowed to layer voices: for a top lead over a bass line or chord progression, output a note array containing both low bass notes and high lead notes with the same duration. "

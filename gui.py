@@ -6,7 +6,7 @@ Tkinter-based chat interface that:
   • Intercepts play_melody_in_fl_studio / play_song calls to show a piano-roll
     preview before anything is sent to FL Studio
   • Lets the user preview locally, confirm (send to FL Studio), or discard
-  • Optionally records voice and transcribes via OpenAI Whisper
+  • Records voice and transcribes via OpenAI Whisper
 
 Usage:
   python gui.py
@@ -19,16 +19,17 @@ import os
 import queue
 import sys
 import threading
+import traceback
 import wave
 from pathlib import Path
 from typing import Any
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from midi_scheduler import MidiEvent, build_events, build_song, preview_song
+from midi_scheduler import MidiEvent, build_events, preview_song
 
 # ── paths ──────────────────────────────────────────────────────────────────────
 
@@ -161,20 +162,25 @@ class PianoRollCanvas(tk.Canvas):
 
 class FLAgentGUI:
 
-    def __init__(self, model: str = "openai/gpt-4o") -> None:
+    def __init__(self, model: str = "openai/gpt-5.4-mini") -> None:
         self.model = model
 
         # thread-safe queues
         self._ui_q:    queue.Queue[dict] = queue.Queue()
         self._input_q: queue.Queue[str]  = queue.Queue()
 
-        # confirmation state (agent thread waits; main thread signals)
-        self._confirm_evt    = threading.Event()
-        self._confirm_result: list[str | None] = [None]
-        self._pending_intent: dict | None       = None
+        # confirmation gate: agent thread blocks here, main thread signals
+        # BUG FIX: always start unset; only _intercept_play clears + waits
+        self._confirm_lock   = threading.Lock()
+        self._confirm_evt    = threading.Event()   # starts unset
+        self._confirm_result: str | None = None
+        self._pending_intent: dict | None = None
 
-        self._in_stream = False    # are we currently rendering a streaming agent reply?
+        self._in_stream = False
         self._recording = False
+        self._rec_frames: list = []
+        self._rec_stream = None
+        self._rec_rate   = 44100
 
         self._build_ui()
         self._start_agent_thread()
@@ -193,32 +199,36 @@ class FLAgentGUI:
         style = ttk.Style()
         style.theme_use("clam")
         for name, bg, fg in [
-            ("TFrame",           BG,      FG),
-            ("TLabel",           BG,      FG),
-            ("TLabelframe",      BG,      FG),
-            ("TLabelframe.Label",BG,      BLUE),
+            ("TFrame",            BG,     FG),
+            ("TLabel",            BG,     FG),
+            ("TLabelframe",       BG,     FG),
+            ("TLabelframe.Label", BG,     BLUE),
         ]:
             style.configure(name, background=bg, foreground=fg, borderwidth=0)
         style.configure("TButton",
-                        background=SURFACE, foreground=FG, borderwidth=0,
-                        focusthickness=0, padding=6)
+                        background=SURFACE, foreground=FG,
+                        borderwidth=0, focusthickness=0, padding=6)
         style.map("TButton",
                   background=[("active", OVERLAY), ("pressed", "#585b70")])
-        style.configure("Accent.TButton", background=BLUE,  foreground=BG)
+        style.configure("Accent.TButton",  background=BLUE, foreground=BG)
         style.map("Accent.TButton",  background=[("active", "#74c7ec")])
-        style.configure("Danger.TButton",  background=RED,   foreground=BG)
+        style.configure("Danger.TButton",  background=RED,  foreground=BG)
         style.map("Danger.TButton",  background=[("active", "#eba0ac")])
-        style.configure("TEntry",    fieldbackground=SURFACE, foreground=FG,
+        style.configure("Record.TButton",  background="#a6e3a1", foreground=BG)
+        style.map("Record.TButton",  background=[("active", "#94e2d5")])
+        style.configure("Recording.TButton", background=RED, foreground=BG)
+        style.map("Recording.TButton", background=[("active", "#eba0ac")])
+        style.configure("TEntry",
+                        fieldbackground=SURFACE, foreground=FG,
                         insertcolor=FG, borderwidth=0)
         style.configure("Vertical.TScrollbar",
-                        background=SURFACE, troughcolor=BG2, borderwidth=0,
-                        arrowcolor=FG_DIM)
+                        background=SURFACE, troughcolor=BG2,
+                        borderwidth=0, arrowcolor=FG_DIM)
 
         # ── paned: chat + preview ──────────────────────────────────────────
         self.pane = ttk.PanedWindow(self.root, orient=tk.VERTICAL)
         self.pane.pack(fill=tk.BOTH, expand=True, padx=8, pady=(8, 0))
 
-        # chat frame
         chat_f = ttk.Frame(self.pane)
         self.pane.add(chat_f, weight=3)
 
@@ -233,14 +243,14 @@ class FLAgentGUI:
         sb.pack(side=tk.RIGHT, fill=tk.Y)
         self.chat.pack(fill=tk.BOTH, expand=True)
 
-        self.chat.tag_configure("user",   foreground=BLUE,   font=("Consolas", 10, "bold"))
+        self.chat.tag_configure("user",   foreground=BLUE,  font=("Consolas", 10, "bold"))
         self.chat.tag_configure("agent",  foreground=GREEN)
         self.chat.tag_configure("tool",   foreground=YELLOW, font=("Consolas", 9))
         self.chat.tag_configure("result", foreground=FG_DIM, font=("Consolas", 9))
         self.chat.tag_configure("system", foreground=FG_DIM, font=("Consolas", 9, "italic"))
         self.chat.tag_configure("error",  foreground=RED)
 
-        # preview frame (hidden until a melody arrives)
+        # preview frame — hidden until a melody arrives
         self.preview_f = ttk.LabelFrame(self.pane, text=" MIDI Preview ", padding=6)
 
         self.piano_roll = PianoRollCanvas(self.preview_f, height=160)
@@ -267,30 +277,26 @@ class FLAgentGUI:
         input_f.pack(fill=tk.X, padx=8, pady=6)
 
         self.input_var = tk.StringVar()
-        entry = ttk.Entry(input_f, textvariable=self.input_var, font=("Consolas", 11))
-        entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
-        entry.bind("<Return>", self._on_send)
-        entry.focus()
+        self._entry = ttk.Entry(input_f, textvariable=self.input_var,
+                                font=("Consolas", 11))
+        self._entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+        self._entry.bind("<Return>", self._on_send)
+        self._entry.focus()
 
         ttk.Button(input_f, text="Send", style="Accent.TButton",
                    command=self._on_send).pack(side=tk.LEFT, padx=(0, 4))
 
-        self._setup_record_btn(input_f)
+        # voice record button — always visible; shows error if sounddevice missing
+        self._rec_btn = ttk.Button(input_f, text="🎤  Record",
+                                   style="Record.TButton",
+                                   command=self._toggle_record)
+        self._rec_btn.pack(side=tk.LEFT)
 
         # ── status bar ────────────────────────────────────────────────────
         self.status_var = tk.StringVar(value="Connecting to MCP server…")
         ttk.Label(self.root, textvariable=self.status_var,
                   foreground=FG_DIM, font=("Consolas", 8)
                   ).pack(fill=tk.X, padx=10, pady=(0, 4))
-
-    def _setup_record_btn(self, parent: ttk.Frame) -> None:
-        try:
-            import sounddevice  # noqa: F401
-            self._rec_btn = ttk.Button(parent, text="🎤  Record",
-                                       command=self._toggle_record)
-            self._rec_btn.pack(side=tk.LEFT)
-        except ImportError:
-            pass  # sounddevice not installed
 
     # ── chat helpers ──────────────────────────────────────────────────────────
 
@@ -313,24 +319,26 @@ class FLAgentGUI:
     def _on_preview(self) -> None:
         if self._pending_intent is None:
             return
-        threading.Thread(
-            target=preview_song, args=(self._pending_intent,), daemon=True
-        ).start()
+        intent = self._pending_intent
+        threading.Thread(target=preview_song, args=(intent,), daemon=True).start()
 
     def _on_confirm(self) -> None:
-        self._confirm_result[0] = "confirmed"
-        self._confirm_evt.set()
+        with self._confirm_lock:
+            self._confirm_result = "confirmed"
+            self._confirm_evt.set()
         self._hide_preview()
 
     def _on_discard(self) -> None:
-        self._confirm_result[0] = "discarded"
-        self._confirm_evt.set()
+        with self._confirm_lock:
+            self._confirm_result = "discarded"
+            self._confirm_evt.set()
         self._hide_preview()
 
     def _on_close(self) -> None:
-        if not self._confirm_evt.is_set():
-            self._confirm_result[0] = "discarded"
-            self._confirm_evt.set()
+        with self._confirm_lock:
+            if not self._confirm_evt.is_set():
+                self._confirm_result = "discarded"
+                self._confirm_evt.set()
         self.root.destroy()
 
     # ── preview panel ─────────────────────────────────────────────────────────
@@ -348,9 +356,6 @@ class FLAgentGUI:
 
         if not self.preview_f.winfo_ismapped():
             self.pane.add(self.preview_f, weight=2)
-
-        self._confirm_evt.clear()
-        self._confirm_result[0] = None
 
     def _hide_preview(self) -> None:
         if self.preview_f.winfo_ismapped():
@@ -386,6 +391,9 @@ class FLAgentGUI:
         elif t == "preview":
             self._show_preview(msg["intent"], msg["events"])
         elif t == "error":
+            if self._in_stream:
+                self._write("", newline=True)
+                self._in_stream = False
             self._write(f"ERROR: {msg['text']}", "error")
 
     # ── voice recording ───────────────────────────────────────────────────────
@@ -397,11 +405,20 @@ class FLAgentGUI:
             self._start_record()
 
     def _start_record(self) -> None:
+        try:
+            import sounddevice as sd  # noqa: F401
+        except ImportError:
+            self._ui_q.put({
+                "type": "error",
+                "text": "sounddevice not installed. Run: pip install sounddevice numpy",
+            })
+            return
+
         import sounddevice as sd
-        self._recording   = True
-        self._rec_frames  = []
-        self._rec_rate    = 44100
-        self._rec_btn.configure(text="⏹  Stop")
+
+        self._recording  = True
+        self._rec_frames = []
+        self._rec_btn.configure(text="⏹  Stop recording", style="Recording.TButton")
 
         def cb(indata, *_):
             self._rec_frames.append(indata.copy())
@@ -410,15 +427,19 @@ class FLAgentGUI:
             samplerate=self._rec_rate, channels=1, dtype="int16", callback=cb
         )
         self._rec_stream.start()
+        self._write("  🎤 Recording… click Stop when done.", "system")
 
     def _stop_record(self) -> None:
         import tempfile
         import numpy as np
 
         self._recording = False
-        self._rec_btn.configure(text="🎤  Record")
-        self._rec_stream.stop()
-        self._rec_stream.close()
+        self._rec_btn.configure(text="🎤  Record", style="Record.TButton")
+
+        if self._rec_stream is not None:
+            self._rec_stream.stop()
+            self._rec_stream.close()
+            self._rec_stream = None
 
         if not self._rec_frames:
             return
@@ -432,18 +453,20 @@ class FLAgentGUI:
             wf.setframerate(self._rec_rate)
             wf.writeframes(audio.tobytes())
 
+        self._write("  Transcribing…", "system")
         threading.Thread(target=self._transcribe, args=(tmp,), daemon=True).start()
 
     def _transcribe(self, path: str) -> None:
         import os as _os
         try:
             from openai import OpenAI
-            key = _os.environ.get("OPENAI_API_KEY")
+            key = _os.environ.get("OPENAI_API_KEY") or _os.environ.get("OPENROUTER_API_KEY")
             if not key:
                 self._ui_q.put({"type": "error",
-                                "text": "OPENAI_API_KEY required for voice transcription."})
+                                "text": "Set OPENAI_API_KEY for voice transcription."})
                 return
-            client = OpenAI(api_key=key)
+            # Use native OpenAI for Whisper (not OpenRouter)
+            client = OpenAI(api_key=_os.environ.get("OPENAI_API_KEY", key))
             with open(path, "rb") as f:
                 tx = client.audio.transcriptions.create(model="whisper-1", file=f)
             text = tx.text.strip()
@@ -451,7 +474,7 @@ class FLAgentGUI:
                 self._input_q.put(text)
                 self._ui_q.put({"type": "chat", "text": f"You (voice): {text}", "tag": "user"})
         except Exception as exc:
-            self._ui_q.put({"type": "error", "text": f"Transcription: {exc}"})
+            self._ui_q.put({"type": "error", "text": f"Transcription failed: {exc}"})
         finally:
             try:
                 _os.unlink(path)
@@ -469,9 +492,10 @@ class FLAgentGUI:
         try:
             loop.run_until_complete(self._agent_async())
         except Exception as exc:
-            self._ui_q.put({"type": "error", "text": str(exc)})
+            self._ui_q.put({"type": "error", "text": f"Agent crashed: {exc}\n{traceback.format_exc()}"})
         finally:
             loop.close()
+            self._ui_q.put({"type": "status", "text": "Agent disconnected."})
 
     async def _agent_async(self) -> None:
         python = VENV_PYTHON if Path(VENV_PYTHON).exists() else sys.executable
@@ -484,11 +508,15 @@ class FLAgentGUI:
                 openai_tools = _tools_to_openai(mcp_tools)
                 llm          = _openrouter_client()
 
-                self._ui_q.put({"type": "status",
-                                "text": f"Ready — {len(mcp_tools)} tools • model: {self.model}"})
-                self._ui_q.put({"type": "chat",
-                                "text": f"FL Agent [{self.model}]  —  type a music request.",
-                                "tag": "system"})
+                self._ui_q.put({
+                    "type": "status",
+                    "text": f"Ready — {len(mcp_tools)} tools • model: {self.model}",
+                })
+                self._ui_q.put({
+                    "type": "chat",
+                    "text": f"FL Agent [{self.model}]  —  type a music request.",
+                    "tag": "system",
+                })
 
                 messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
@@ -498,12 +526,12 @@ class FLAgentGUI:
                     )
                     messages.append({"role": "user", "content": user})
 
-                    # agentic loop
+                    # agentic loop — keeps going until LLM stops calling tools
                     while True:
                         try:
                             asst, finish = await asyncio.get_event_loop().run_in_executor(
                                 None, _stream, llm, self.model, messages,
-                                openai_tools, self._ui_q
+                                openai_tools, self._ui_q,
                             )
                             messages.append(asst)
 
@@ -514,7 +542,7 @@ class FLAgentGUI:
                                     args = json.loads(tc["function"]["arguments"])
                                     self._ui_q.put({
                                         "type": "chat",
-                                        "text": f"  → {fn}({json.dumps(args)[:140]})",
+                                        "text": f"  → {fn}({json.dumps(args)[:160]})",
                                         "tag": "tool",
                                     })
 
@@ -528,7 +556,7 @@ class FLAgentGUI:
 
                                     self._ui_q.put({
                                         "type": "chat",
-                                        "text": f"  ← {result_text[:220]}",
+                                        "text": f"  ← {result_text[:300]}",
                                         "tag": "result",
                                     })
                                     messages.append({
@@ -537,15 +565,21 @@ class FLAgentGUI:
                                         "content": result_text,
                                     })
                             else:
-                                break
+                                break   # no tool calls → final response → wait for next user input
+
                         except Exception as exc:
-                            self._ui_q.put({"type": "error", "text": str(exc)})
+                            tb = traceback.format_exc()
+                            self._ui_q.put({"type": "error", "text": f"{exc}\n{tb}"})
+                            # Remove the last assistant message if it failed mid-processing
+                            # to avoid broken conversation state
+                            if messages and messages[-1].get("role") == "assistant":
+                                messages.pop()
                             break
 
     async def _intercept_play(
         self, fn: str, args: dict, session: ClientSession
     ) -> str:
-        """Show piano roll and wait for user to confirm or discard before sending."""
+        """Show piano roll, wait for confirmation, then optionally execute the tool."""
         tempo  = args.get("tempo", 120)
         layers = args.get("layers") or {"melody": args.get("melody_pattern", [])}
 
@@ -554,6 +588,13 @@ class FLAgentGUI:
             for name, notes in layers.items()
         }
 
+        # ── BUG FIX: clear BEFORE sending to UI queue ─────────────────────
+        # Without this, a previously-set event causes wait() to return
+        # immediately on the second and subsequent calls, skipping the preview.
+        with self._confirm_lock:
+            self._confirm_evt.clear()
+            self._confirm_result = None
+
         self._ui_q.put({
             "type":   "preview",
             "intent": {"tempo": tempo, "layers": layers},
@@ -561,20 +602,26 @@ class FLAgentGUI:
         })
         self._ui_q.put({
             "type": "chat",
-            "text": "  ⏸  Review the piano roll above — confirm or discard.",
+            "text": "  ⏸  Review the piano roll — confirm or discard.",
             "tag":  "system",
         })
 
         # block agent thread until user responds (5-minute timeout)
-        confirmed = await asyncio.get_event_loop().run_in_executor(
+        await asyncio.get_event_loop().run_in_executor(
             None, self._confirm_evt.wait, 300
         )
 
-        if not confirmed or self._confirm_result[0] != "confirmed":
+        with self._confirm_lock:
+            result = self._confirm_result
+
+        if result != "confirmed":
             return "Discarded — MIDI not sent to FL Studio."
 
-        res = await session.call_tool(fn, args)
-        return "\n".join(c.text for c in res.content if hasattr(c, "text"))
+        try:
+            res = await session.call_tool(fn, args)
+            return "\n".join(c.text for c in res.content if hasattr(c, "text"))
+        except Exception as exc:
+            return f"ERROR sending to FL Studio: {exc}"
 
     # ── entry point ───────────────────────────────────────────────────────────
 
@@ -610,9 +657,9 @@ def _stream(
     llm, model: str, messages: list, tools: list, ui_q: queue.Queue
 ) -> tuple[dict[str, Any], str | None]:
     """Blocking streaming response — runs in executor thread."""
-    parts:  list[str]             = []
-    ptc:    dict[int, dict]       = {}
-    finish: str | None            = None
+    parts:  list[str]       = []
+    ptc:    dict[int, dict] = {}
+    finish: str | None      = None
     started = False
 
     s = llm.chat.completions.create(
@@ -640,11 +687,15 @@ def _stream(
                     "id": None, "type": "function",
                     "function": {"name": "", "arguments": ""},
                 })
-                if tc.id:            p["id"]   = tc.id
-                if tc.type:          p["type"] = tc.type
+                if tc.id:
+                    p["id"]   = tc.id
+                if tc.type:
+                    p["type"] = tc.type
                 if tc.function:
-                    if tc.function.name:      p["function"]["name"]      += tc.function.name
-                    if tc.function.arguments: p["function"]["arguments"] += tc.function.arguments
+                    if tc.function.name:
+                        p["function"]["name"]      += tc.function.name
+                    if tc.function.arguments:
+                        p["function"]["arguments"] += tc.function.arguments
     finally:
         if started:
             ui_q.put({"type": "stream_end"})
@@ -673,6 +724,6 @@ def _stream(
 if __name__ == "__main__":
     import argparse
     p = argparse.ArgumentParser(description="FL Agent GUI")
-    p.add_argument("--model", default=os.environ.get("OPENROUTER_MODEL", "openai/gpt-4o"))
+    p.add_argument("--model", default=os.environ.get("OPENROUTER_MODEL", "openai/gpt-5.4-mini"))
     a = p.parse_args()
     FLAgentGUI(model=a.model).run()

@@ -14,8 +14,9 @@ You: "play me a driving electro bass line in F minor"
 | Requirement | Notes |
 |---|---|
 | [Python 3.11+](https://www.python.org/downloads/) | Must be on PATH |
-| [Node.js / npm](https://nodejs.org/) | Required to install Claude Code CLI |
+| [Node.js / npm](https://nodejs.org/) | Required to install Claude Code CLI and GitHub Copilot CLI |
 | [Claude Code CLI](https://claude.ai/code) | Installed automatically by `START_AGENT.ps1`, or manually: `npm install -g @anthropic-ai/claude-code` |
+| [GitHub Copilot CLI](https://github.com/github/feedback/discussions/7878) | Automatically installed by `START_AGENT.ps1 copilot` if not present. Uses `gh copilot` command after installing GitHub CLI and the copilot extension. |
 | [loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html) | Free virtual MIDI port driver |
 | FL Studio | Any version with MIDI scripting support |
 | Anthropic API key | Set as `ANTHROPIC_API_KEY` in your environment |
@@ -31,6 +32,16 @@ You: "play me a driving electro bass line in F minor"
 ```
 
 This installs Claude Code if needed, creates the Python venv, installs dependencies, registers the MCP server, and opens Claude.
+
+> To use Copilot CLI instead of Claude, pass the `copilot` mode:
+>
+> ```powershell
+> .\START_AGENT.ps1 copilot
+> ```
+> 
+> The script will automatically install GitHub CLI and the Copilot extension if needed, then launch `gh copilot`. Falls back to VS Code if installation fails.
+>
+> If you use `.\START_AGENT.ps1 openrouter`, the custom OpenRouter CLI now streams assistant output live and shows tool activity while it works.
 
 3. **Describe your music** in the Claude prompt:
 
@@ -96,7 +107,7 @@ The agent has access to these tools (defined in `fl_mcp_server.py`):
 |---|---|
 | `open_fl_studio` | Launches FL Studio from its default install path |
 | `play_melody_in_fl_studio` | Arms recording, plays all notes via loopMIDI, stops recording |
-| `quantize_melody` | Snaps note durations to a rhythmic grid (16th-note by default) |
+| `quantize_melody` | Snaps note durations to a rhythmic grid measured in bars (16th-note grid by default, 1/16 bar) |
 | `start_recording` | Sends MIDI note 72 → FL Studio starts recording |
 | `stop_recording` | Sends MIDI note 74 → FL Studio stops recording |
 

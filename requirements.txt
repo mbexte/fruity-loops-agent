@@ -5,4 +5,6 @@ mido
 requests
 mcp
 openai
-# sounddevice  # optional: enable for voice recording in gui.py
+sounddevice
+numpy
+# sounddevice + numpy are required for voice recording in gui.py
