@@ -14,7 +14,8 @@ You: "play me a driving electro bass line in F minor"
 | Requirement | Notes |
 |---|---|
 | [Python 3.11+](https://www.python.org/downloads/) | Must be on PATH |
-| [Claude Code CLI](https://claude.ai/code) | `npm install -g @anthropic-ai/claude-code` |
+| [Node.js / npm](https://nodejs.org/) | Required to install Claude Code CLI |
+| [Claude Code CLI](https://claude.ai/code) | Installed automatically by `START_AGENT.ps1`, or manually: `npm install -g @anthropic-ai/claude-code` |
 | [loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html) | Free virtual MIDI port driver |
 | FL Studio | Any version with MIDI scripting support |
 | Anthropic API key | Set as `ANTHROPIC_API_KEY` in your environment |
@@ -29,7 +30,7 @@ You: "play me a driving electro bass line in F minor"
 .\START_AGENT.ps1
 ```
 
-This installs dependencies, registers the MCP server with Claude Code, and opens Claude.
+This installs Claude Code if needed, creates the Python venv, installs dependencies, registers the MCP server, and opens Claude.
 
 3. **Describe your music** in the Claude prompt:
 

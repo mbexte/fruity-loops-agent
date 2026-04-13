@@ -6,6 +6,36 @@ $ErrorActionPreference = "Stop"
 $Root = $PSScriptRoot
 
 # ---------------------------------------------------------------------------
+# Step 0 — Ensure Claude Code CLI is installed
+# ---------------------------------------------------------------------------
+Write-Host ""
+Write-Host "==> Checking Claude Code CLI..." -ForegroundColor Cyan
+
+if (-not (Get-Command "claude" -ErrorAction SilentlyContinue)) {
+    Write-Host "    'claude' not found. Attempting to install via npm..." -ForegroundColor Yellow
+
+    if (-not (Get-Command "npm" -ErrorAction SilentlyContinue)) {
+        Write-Host ""
+        Write-Host "ERROR: Neither 'claude' nor 'npm' was found on PATH." -ForegroundColor Red
+        Write-Host ""
+        Write-Host "Install Node.js (which includes npm) from https://nodejs.org/, then re-run this script." -ForegroundColor Yellow
+        Write-Host "Or install Claude Code manually: npm install -g @anthropic-ai/claude-code" -ForegroundColor Yellow
+        exit 1
+    }
+
+    npm install -g @anthropic-ai/claude-code
+    if (-not (Get-Command "claude" -ErrorAction SilentlyContinue)) {
+        Write-Host ""
+        Write-Host "ERROR: Installation appeared to succeed but 'claude' is still not on PATH." -ForegroundColor Red
+        Write-Host "Close and reopen PowerShell, then run this script again." -ForegroundColor Yellow
+        exit 1
+    }
+    Write-Host "    Claude Code installed." -ForegroundColor Green
+} else {
+    Write-Host "    OK ($(claude --version 2>$null))" -ForegroundColor Green
+}
+
+# ---------------------------------------------------------------------------
 # Step 1 — Python virtual environment + dependencies
 # ---------------------------------------------------------------------------
 Write-Host ""
