@@ -3,11 +3,13 @@ fl_mcp_server.py — MCP server exposing FL Studio MIDI control as tools.
 
 Tools:
   open_fl_studio           — Launch FL Studio
-  play_melody_in_fl_studio — Arm recording, play melody, stop recording
+  play_melody_in_fl_studio — Single-layer: arm recording, play melody, stop recording
+  play_song                — Multi-layer: melody + chords + bass via absolute-time scheduler
   start_recording          — Send MIDI note 72 (start recording)
   stop_recording           — Send MIDI note 74 (stop recording)
+  quantize_melody          — Snap note durations to a rhythmic grid
 
-Run standalone (used by Claude Code via MCP):
+Run standalone (used by Claude Code / agent.py via MCP):
   python fl_mcp_server.py
 """
 
@@ -24,6 +26,7 @@ from mcp.server.stdio import stdio_server
 # Make sure fl_transport and music_api are importable from the same directory.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fl_transport
+from midi_scheduler import play_song as _play_song
 from music_api import note_to_midi, sanitize_midi_notes, normalize_melody_pattern, quantize_melody_pattern
 
 # ---------------------------------------------------------------------------
@@ -91,7 +94,8 @@ async def list_tools() -> list[types.Tool]:
                         "description": (
                             "List of note objects. Each object has 'note' (note name string "
                             "like 'C4', 'F#3', or a list of note names for chords) and "
-                            "'duration' (length in 4/4 bars; 1.0 = full bar, 0.5 = half bar)."
+                            "'duration' (length in 4/4 bars; 1.0 = full bar, 0.5 = half note, "
+                            "0.25 = quarter note, 0.125 = eighth note, 0.0625 = sixteenth note)."
                         ),
                         "items": {
                             "type": "object",
@@ -105,7 +109,7 @@ async def list_tools() -> list[types.Tool]:
                                 },
                                 "duration": {
                                     "type": "number",
-                                    "description": "Duration in bars (min 0.5).",
+                                    "description": "Duration in bars (min 0.0625).",
                                 },
                             },
                             "required": ["note", "duration"],
@@ -155,14 +159,62 @@ async def list_tools() -> list[types.Tool]:
                         "type": "number",
                         "description": (
                             "Grid resolution in bars. "
-                            "0.25 = 16th-note grid (default), "
-                            "0.5 = 8th-note grid, "
-                            "1.0 = quarter-note grid."
+                            "0.0625 = 16th-note grid (default), "
+                            "0.125 = 8th-note grid, "
+                            "0.25 = quarter-note grid."
                         ),
-                        "default": 0.25,
+                        "default": 0.0625,
                     },
                 },
                 "required": ["melody_pattern"],
+            },
+        ),
+        types.Tool(
+            name="play_song",
+            description=(
+                "Play a multi-layer composition (melody, chords, bass) via the absolute-time "
+                "scheduler. All layers start simultaneously at t=0 — perfect synchronisation. "
+                "Requires loopMIDI 'FL Agent' port. Wraps playback in FL Studio record start/stop."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "tempo": {
+                        "type": "integer",
+                        "description": "Tempo in BPM.",
+                    },
+                    "layers": {
+                        "type": "object",
+                        "description": (
+                            "Named layers. Each key is a layer name (e.g. 'melody', 'chords', 'bass') "
+                            "and its value is a list of note objects with 'note' and 'duration' (bars)."
+                        ),
+                        "additionalProperties": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "note": {
+                                        "oneOf": [
+                                            {"type": "string"},
+                                            {"type": "integer"},
+                                            {"type": "array", "items": {"oneOf": [
+                                                {"type": "string"}, {"type": "integer"}
+                                            ]}},
+                                        ],
+                                        "description": "Note name ('C4'), MIDI int, or chord list.",
+                                    },
+                                    "duration": {
+                                        "type": "number",
+                                        "description": "Duration in bars (min 0.0625).",
+                                    },
+                                },
+                                "required": ["note", "duration"],
+                            },
+                        },
+                    },
+                },
+                "required": ["tempo", "layers"],
             },
         ),
     ]
@@ -242,9 +294,26 @@ async def call_tool(
         except Exception as exc:
             return [types.TextContent(type="text", text=f"ERROR: {exc}")]
 
+    elif name == "play_song":
+        tempo  = int(arguments.get("tempo", 120))
+        layers = arguments.get("layers", {})
+        intent = {"tempo": tempo, "layers": layers}
+        try:
+            await asyncio.get_event_loop().run_in_executor(None, _play_song, intent)
+            layer_names = ", ".join(layers.keys())
+            total_notes = sum(len(v) for v in layers.values())
+            return [types.TextContent(
+                type="text",
+                text=f"Song played at {tempo} BPM — layers: {layer_names} ({total_notes} notes total).",
+            )]
+        except SystemExit as exc:
+            return [types.TextContent(type="text", text=f"MIDI error: {exc}")]
+        except Exception as exc:
+            return [types.TextContent(type="text", text=f"ERROR: {exc}")]
+
     elif name == "quantize_melody":
         raw_pattern = arguments.get("melody_pattern", [])
-        grid_bars = float(arguments.get("grid_bars", 0.25))
+        grid_bars = float(arguments.get("grid_bars", 0.0625))
         quantized = quantize_melody_pattern(raw_pattern, grid_bars=grid_bars)
         import json
         return [types.TextContent(

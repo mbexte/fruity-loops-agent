@@ -4,3 +4,7 @@ pydantic
 mido
 requests
 mcp
+openai
+sounddevice
+numpy
+# sounddevice + numpy are required for voice recording in gui.py
