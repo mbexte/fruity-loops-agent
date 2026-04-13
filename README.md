@@ -1,96 +1,112 @@
 # FL Agent
 
-A FastAPI-based music API for generating melody and MIDI intent, then sending notes to FL Studio via MIDI.
+Generate music and send it directly to FL Studio by chatting with a Claude AI agent. Describe what you want in plain English — the agent composes a melody and plays it into FL Studio's piano roll via MIDI.
 
-## Setup
+```
+You: "play me a driving electro bass line in F minor"
+  → Claude designs melody
+  → MCP tools send MIDI via loopMIDI
+  → FL Studio records the notes
+```
 
-### 1. Create and activate a Python virtual environment
+## Prerequisites
 
-From the repo root (`c:\GIT\fl-agent\fl-agent`):
+| Requirement | Notes |
+|---|---|
+| [Python 3.11+](https://www.python.org/downloads/) | Must be on PATH |
+| [Claude Code CLI](https://claude.ai/code) | `npm install -g @anthropic-ai/claude-code` |
+| [loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html) | Free virtual MIDI port driver |
+| FL Studio | Any version with MIDI scripting support |
+| Anthropic API key | Set as `ANTHROPIC_API_KEY` in your environment |
 
-PowerShell:
+## Quick Start
+
+1. **Set up loopMIDI and FL Studio** — see [FL Studio MIDI Setup](#fl-studio-midi-setup) below.
+
+2. **Run the launch script** from the repo root:
+
 ```powershell
+.\START_AGENT.ps1
+```
+
+This installs dependencies, registers the MCP server with Claude Code, and opens Claude.
+
+3. **Describe your music** in the Claude prompt:
+
+```
+play me an upbeat bass line in E minor at 128 BPM
+```
+
+```
+create a pop chord progression in C major
+```
+
+```
+generate a bright lead melody inspired by 80s synth pop
+```
+
+Claude will open FL Studio (if not already running), compose the pattern, and play it into the active piano roll.
+
+## FL Studio MIDI Setup
+
+Do this once before using the agent.
+
+1. Start **loopMIDI** and create a virtual port named exactly `FL Agent`.
+2. Open FL Studio → **Options → MIDI Settings**.
+3. In the Input list, enable the `FL Agent` port.
+4. Set its Controller type to **FL Agent Controller** (provided in `fl_studio_script/`).
+5. The agent uses MIDI note `72` (C5) to start recording and `74` (D5) to stop — these are reserved and never emitted as musical notes.
+
+To install the controller script, copy `fl_studio_script/device_FL_Agent_Controller.py` to:
+```
+%USERPROFILE%\Documents\Image-Line\FL Studio\Settings\Hardware\
+```
+then restart FL Studio.
+
+## Manual Setup
+
+If you prefer not to use `START_AGENT.ps1`:
+
+```powershell
+# 1. Create venv and install deps
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+.\.venv\Scripts\pip install -r requirements.txt
+
+# 2. Register the MCP server with Claude Code
+#    Add the following to .claude\settings.json in this repo:
+#    {
+#      "mcpServers": {
+#        "fl-agent": {
+#          "command": "<absolute path>/.venv/Scripts/python.exe",
+#          "args": ["<absolute path>/fl_mcp_server.py"]
+#        }
+#      }
+#    }
+
+# 3. Launch Claude Code from the repo root
+claude
 ```
 
-Bash:
-```bash
-python -m venv .venv
-source .venv/Scripts/activate
-```
+## Available MCP Tools
 
-### 2. Install dependencies
+The agent has access to these tools (defined in `fl_mcp_server.py`):
 
-```powershell
-pip install -r requirements.txt
-```
+| Tool | What it does |
+|---|---|
+| `open_fl_studio` | Launches FL Studio from its default install path |
+| `play_melody_in_fl_studio` | Arms recording, plays all notes via loopMIDI, stops recording |
+| `quantize_melody` | Snaps note durations to a rhythmic grid (16th-note by default) |
+| `start_recording` | Sends MIDI note 72 → FL Studio starts recording |
+| `stop_recording` | Sends MIDI note 74 → FL Studio stops recording |
 
-### 3. Configure environment variables
+## File Reference
 
-The app uses `OPENROUTER_API_KEY` for AI-powered music intent generation. Set this in your shell before running the server.
-
-PowerShell:
-```powershell
-$env:OPENROUTER_API_KEY = "your_api_key_here"
-```
-
-Bash:
-```bash
-export OPENROUTER_API_KEY="your_api_key_here"
-```
-
-If `OPENROUTER_API_KEY` is not set, the API will use a fallback static melody for local testing.
-
-## Running the server
-
-From the repo root:
-
-```powershell
-.\.venv\Scripts\python.exe -m uvicorn music_api:app --reload --host 127.0.0.1 --port 8000
-```
-
-Then open:
-
-- `http://127.0.0.1:8000/docs` for FastAPI Swagger UI
-
-## VS Code Launch Configuration
-
-A `.vscode/launch.json` file exists that launches the server via `uvicorn`.
-
-In VS Code, open the Run and Debug panel and select `Music API Server`.
-
-## FL Studio MIDI setup
-
-This project sends notes to FL Studio using a loopMIDI port named `FL Agent`.
-
-1. Start loopMIDI and create a port named `FL Agent`.
-2. In FL Studio MIDI settings, enable the `FL Agent` port and set the controller type to `FL Agent Controller`.
-3. The app uses MIDI note `72` (C5) to start recording and `74` (D5) to stop recording. These are reserved and are not emitted as playable notes.
-
-## Notes
-
-- The API accepts natural language prompts and converts them to structured music intent.
-- Melodies are generated in 4/4 time and use bar-based durations.
-- Chords are supported by passing multiple note strings in the same `melody_pattern` entry.
-
-## Useful commands
-
-```powershell
-# Activate virtual environment
-.\.venv\Scripts\Activate.ps1
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Run server
-python -m uvicorn music_api:app --reload --host 127.0.0.1 --port 8000
-```
-
-## Files
-
-- `music_api.py` - FastAPI application and prompt handling
-- `fl_transport.py` - MIDI transport to FL Studio
-- `requirements.txt` - Python dependencies
-- `.vscode/launch.json` - VS Code launch configuration
-- `RUN_SERVER.ps1` - example server command
+| File | Purpose |
+|---|---|
+| `START_AGENT.ps1` | One-click setup + Claude Code launcher |
+| `fl_mcp_server.py` | MCP server — exposes FL Studio control as tools |
+| `AGENTS.md` | Persistent instructions Claude reads as context |
+| `fl_transport.py` | Low-level MIDI transport via loopMIDI |
+| `music_api.py` | Note utilities and (legacy) FastAPI endpoints |
+| `fl_studio_script/device_FL_Agent_Controller.py` | FL Studio MIDI controller script |
+| `requirements.txt` | Python dependencies |
