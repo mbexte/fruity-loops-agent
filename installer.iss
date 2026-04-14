@@ -15,211 +15,39 @@
 #define AppPublisher "FL Agent Project"
 #define AppURL       "https://github.com/mbexte/fruity-loops-agent"
 #define AppExeName   "FL Agent.exe"
-; Unique application GUID — do NOT change after first release
-#define AppId        "{{7C3A2B1F-D4E5-4F6A-8B9C-0D1E2F3A4B5C}"
 
 ; ============================================================================
 [Setup]
-AppId={#AppId}
+AppId={{7C3A2B1F-D4E5-4F6A-8B9C-0D1E2F3A4B5C}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
 AppPublisher={#AppPublisher}
 AppPublisherURL={#AppURL}
-AppSupportURL={#AppURL}/issues
-AppUpdatesURL={#AppURL}/releases
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
-AllowNoIcons=yes
 OutputDir=Output
 OutputBaseFilename=FL_Agent_Setup
-Compression=lzma2/max
+Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=lowest
-ArchitecturesInstallIn64BitMode=x64
 UninstallDisplayIcon={app}\{#AppExeName}
-UninstallDisplayName={#AppName} {#AppVersion}
 
 ; ============================================================================
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 ; ============================================================================
-; NOTE: Each [Tasks] entry must be on a single line — no backslash continuation
-; ============================================================================
-[Tasks]
-Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Shortcuts:"; Flags: unchecked
-Name: "flstudio"; Description: "Install FL Studio MIDI controller script"; GroupDescription: "FL Studio Integration:"
-Name: "configureclaude"; Description: "Register MCP server with Claude Code (if installed)"; GroupDescription: "Agent Configuration:"; Flags: unchecked
-Name: "configurevscode"; Description: "Write VS Code MCP config for GitHub Copilot"; GroupDescription: "Agent Configuration:"; Flags: unchecked
-
-; ============================================================================
 [Files]
 Source: "dist\FL Agent\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "fl_studio_script\device_FL_Agent_Controller.py"; DestDir: "{tmp}"; Flags: dontcopy
+Source: "fl_studio_script\device_FL_Agent_Controller.py"; DestDir: "{app}\fl_studio_script"; Flags: ignoreversion
 
 ; ============================================================================
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"
 Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
-Name: "{commondesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
 
 ; ============================================================================
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "Launch {#AppName} now"; Flags: nowait postinstall skipifsilent
-
-; ============================================================================
-[Code]
-
-var
-  ApiPage: TInputQueryWizardPage;
-
-// ---------------------------------------------------------------------------
-// Locate FL Studio's Hardware folder (where device scripts live)
-// ---------------------------------------------------------------------------
-function FindFLStudioHardwareDir: string;
-var
-  Candidate: string;
-begin
-  Candidate := ExpandConstant('{userdocs}\Image-Line\FL Studio\Settings\Hardware');
-  if DirExists(Candidate) then
-    Result := Candidate
-  else
-    Result := '';
-end;
-
-// ---------------------------------------------------------------------------
-// Write content to a file (overwrites if exists)
-// ---------------------------------------------------------------------------
-procedure WriteTextFile(FileName: string; Content: string);
-begin
-  SaveStringToFile(FileName, Content, False);
-end;
-
-// ---------------------------------------------------------------------------
-// Escape backslashes for embedding a Windows path in JSON
-// ---------------------------------------------------------------------------
-function JsonPath(S: string): string;
-begin
-  Result := StringReplace(S, '\', '\\', [rfReplaceAll]);
-end;
-
-// ---------------------------------------------------------------------------
-// Wizard initialisation — add optional API-key input page
-// ---------------------------------------------------------------------------
-procedure InitializeWizard;
-begin
-  ApiPage := CreateInputQueryPage(
-    wpSelectTasks,
-    'API Keys (Optional)',
-    'Configure your AI assistant',
-    'Enter an API key so FL Agent can talk to an AI model right away.' + #13#10 +
-    'You can skip this and set the environment variable manually later.' + #13#10#13#10 +
-    'Get a free key at openrouter.ai — supports Claude, GPT-4, and more.');
-
-  ApiPage.Add('OpenRouter API Key  (OPENROUTER_API_KEY):', True);
-  ApiPage.Add('Anthropic API Key   (ANTHROPIC_API_KEY):', True);
-end;
-
-// ---------------------------------------------------------------------------
-// Post-install actions
-// ---------------------------------------------------------------------------
-procedure CurStepChanged(CurStep: TSetupStep);
-var
-  HardwareDir: string;
-  ControllerDst: string;
-  AppPath: string;
-  McpExePath: string;
-  ClaudeDir: string;
-  ClaudeSettings: string;
-  VsCodeDir: string;
-  VsCodeMcp: string;
-  JsonContent: string;
-begin
-  if CurStep <> ssPostInstall then Exit;
-
-  AppPath    := ExpandConstant('{app}');
-  McpExePath := AppPath + '\fl_mcp_server.exe';
-
-  // ── 1. FL Studio controller script ────────────────────────────────────────
-  if IsTaskSelected('flstudio') then
-  begin
-    HardwareDir := FindFLStudioHardwareDir;
-    if HardwareDir <> '' then
-    begin
-      ExtractTemporaryFile('device_FL_Agent_Controller.py');
-      ControllerDst := HardwareDir + '\device_FL_Agent_Controller.py';
-      FileCopy(ExpandConstant('{tmp}\device_FL_Agent_Controller.py'), ControllerDst, False);
-    end
-    else
-    begin
-      MsgBox(
-        'FL Studio Hardware folder not found:' + #13#10 +
-        ExpandConstant('{userdocs}\Image-Line\FL Studio\Settings\Hardware') + #13#10#13#10 +
-        'After installing FL Studio, copy this file there manually:' + #13#10 +
-        AppPath + '\fl_studio_script\device_FL_Agent_Controller.py' + #13#10#13#10 +
-        'Then restart FL Studio, open Options > MIDI Settings > Input,' + #13#10 +
-        'enable the "FL Agent" port and set its controller to "FL Agent Controller".',
-        mbInformation, MB_OK);
-    end;
-  end;
-
-  // ── 2. Persist API keys in the user-level environment ─────────────────────
-  if ApiPage.Values[0] <> '' then
-    RegWriteStringValue(HKEY_CURRENT_USER, 'Environment', 'OPENROUTER_API_KEY', ApiPage.Values[0]);
-  if ApiPage.Values[1] <> '' then
-    RegWriteStringValue(HKEY_CURRENT_USER, 'Environment', 'ANTHROPIC_API_KEY', ApiPage.Values[1]);
-
-  // ── 3. Register MCP server with Claude Code ────────────────────────────────
-  if IsTaskSelected('configureclaude') then
-  begin
-    ClaudeDir      := ExpandConstant('{userappdata}') + '\.claude';
-    ClaudeSettings := ClaudeDir + '\settings.json';
-
-    if not DirExists(ClaudeDir) then
-      CreateDir(ClaudeDir);
-
-    // Only write if file is absent to avoid overwriting existing user config
-    if not FileExists(ClaudeSettings) then
-    begin
-      JsonContent :=
-        '{' + #13#10 +
-        '  "mcpServers": {' + #13#10 +
-        '    "fl-agent": {' + #13#10 +
-        '      "command": "' + JsonPath(McpExePath) + '",' + #13#10 +
-        '      "args": []' + #13#10 +
-        '    }' + #13#10 +
-        '  }' + #13#10 +
-        '}';
-      WriteTextFile(ClaudeSettings, JsonContent);
-    end;
-  end;
-
-  // ── 4. Write VS Code / GitHub Copilot MCP config ──────────────────────────
-  if IsTaskSelected('configurevscode') then
-  begin
-    VsCodeDir := AppPath + '\.vscode';
-    VsCodeMcp := VsCodeDir + '\mcp.json';
-
-    if not DirExists(VsCodeDir) then
-      CreateDir(VsCodeDir);
-
-    JsonContent :=
-      '{' + #13#10 +
-      '  "servers": {' + #13#10 +
-      '    "fl-agent": {' + #13#10 +
-      '      "type": "stdio",' + #13#10 +
-      '      "command": "' + JsonPath(McpExePath) + '",' + #13#10 +
-      '      "args": []' + #13#10 +
-      '    }' + #13#10 +
-      '  }' + #13#10 +
-      '}';
-    WriteTextFile(VsCodeMcp, JsonContent);
-  end;
-end;
-
-function NextButtonClick(CurPageID: Integer): Boolean;
-begin
-  Result := True;
-end;
