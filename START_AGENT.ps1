@@ -45,19 +45,25 @@ Write-Host "    OK" -ForegroundColor Green
 Write-Host ""
 Write-Host "==> Installing FL Studio controller script..." -ForegroundColor Cyan
 
-$ControllerSrc = Join-Path $Root "fl_studio_script\device_FL_Agent_Controller.py"
+$ControllerSrc = Join-Path $Root "fl_studio_script\device_FL Agent Controller.py"
+$IniSrc        = Join-Path $Root "fl_studio_script\FL Agent Controller.ini"
 $HardwareDir   = Join-Path $env:USERPROFILE "Documents\Image-Line\FL Studio\Settings\Hardware"
+$DeviceDir     = Join-Path $HardwareDir "FL Agent Controller"
 
 if (Test-Path $HardwareDir) {
-    Copy-Item $ControllerSrc $HardwareDir -Force
-    Write-Host "    Installed → $HardwareDir" -ForegroundColor Green
+    if (-not (Test-Path $DeviceDir)) { New-Item -ItemType Directory -Path $DeviceDir | Out-Null }
+    Copy-Item $ControllerSrc $DeviceDir -Force
+    Copy-Item $IniSrc        $HardwareDir -Force
+    Write-Host "    Installed → $DeviceDir" -ForegroundColor Green
+    Write-Host "    Installed → $HardwareDir\FL Agent Controller.ini" -ForegroundColor Green
     Write-Host "    Restart FL Studio if it is already open, then go to" -ForegroundColor Gray
     Write-Host "    Options > MIDI Settings > Input, enable 'FL Agent'," -ForegroundColor Gray
     Write-Host "    and set its Controller type to 'FL Agent Controller'." -ForegroundColor Gray
 } else {
     Write-Host "    WARNING: FL Studio Hardware directory not found at:" -ForegroundColor Yellow
     Write-Host "    $HardwareDir" -ForegroundColor Yellow
-    Write-Host "    Copy fl_studio_script\device_FL_Agent_Controller.py there manually." -ForegroundColor Yellow
+    Write-Host "    Copy fl_studio_script\device_FL Agent Controller.py and" -ForegroundColor Yellow
+    Write-Host "    fl_studio_script\FL Agent Controller.ini there manually." -ForegroundColor Yellow
 }
 
 # ---------------------------------------------------------------------------

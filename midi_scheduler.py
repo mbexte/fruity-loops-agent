@@ -26,11 +26,12 @@ import mido
 # ── constants ─────────────────────────────────────────────────────────────────
 
 PORT_NAME        = "FL Agent"
-NOTE_START       = 72     # C5 → arm FL Studio recording
-NOTE_STOP        = 74     # D5 → stop FL Studio recording
-DEFAULT_CHANNEL  = 0
-DEFAULT_VELOCITY = 100
-RESERVED_NOTES   = frozenset({NOTE_START, NOTE_STOP})
+NOTE_START         = 72     # C5 → arm FL Studio recording
+NOTE_STOP          = 74     # D5 → stop FL Studio recording
+NOTE_LIST_CHANNELS = 76     # E5 → dump channel rack to JSON file
+DEFAULT_CHANNEL    = 0
+DEFAULT_VELOCITY   = 100
+RESERVED_NOTES     = frozenset({NOTE_START, NOTE_STOP, NOTE_LIST_CHANNELS})
 
 LOOKAHEAD_S  = 0.020   # 20 ms look-ahead window (compensates for OS jitter)
 SPIN_MARGIN  = 0.001   # spin only for the final 1 ms before dispatch

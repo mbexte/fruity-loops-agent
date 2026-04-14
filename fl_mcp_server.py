@@ -120,6 +120,15 @@ async def list_tools() -> list[types.Tool]:
             },
         ),
         types.Tool(
+            name="list_channels",
+            description=(
+                "Ask FL Studio to dump its current channel rack. Sends MIDI note 76 to "
+                "the FL Agent Controller, which writes the channel list to a temp JSON "
+                "file that this tool reads back. Returns a list of {index, name} entries."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        types.Tool(
             name="start_recording",
             description="Send MIDI note 72 (C5) to FL Studio to arm and start recording.",
             inputSchema={"type": "object", "properties": {}},
@@ -273,6 +282,19 @@ async def call_tool(
             )]
         except SystemExit as exc:
             return [types.TextContent(type="text", text=f"MIDI error: {exc}")]
+        except Exception as exc:
+            return [types.TextContent(type="text", text=f"ERROR: {exc}")]
+
+    elif name == "list_channels":
+        try:
+            channels = await asyncio.get_event_loop().run_in_executor(
+                None, fl_transport.list_channels
+            )
+            import json
+            return [types.TextContent(
+                type="text",
+                text=json.dumps({"count": len(channels), "channels": channels}, indent=2),
+            )]
         except Exception as exc:
             return [types.TextContent(type="text", text=f"ERROR: {exc}")]
 

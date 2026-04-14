@@ -69,11 +69,13 @@ Do this once before using the agent.
 4. Set its Controller type to **FL Agent Controller** (provided in `fl_studio_script/`).
 5. The agent uses MIDI note `72` (C5) to start recording and `74` (D5) to stop — these are reserved and never emitted as musical notes.
 
-To install the controller script, copy `fl_studio_script/device_FL_Agent_Controller.py` to:
+To install the controller script, copy `fl_studio_script/device_FL Agent Controller.py` into a
+new subfolder `FL Agent Controller\` inside:
 ```
 %USERPROFILE%\Documents\Image-Line\FL Studio\Settings\Hardware\
 ```
-then restart FL Studio.
+and copy `fl_studio_script/FL Agent Controller.ini` directly into that `Hardware\` folder (next
+to the subfolder). Then restart FL Studio.
 
 ## Manual Setup
 
@@ -120,5 +122,6 @@ The agent has access to these tools (defined in `fl_mcp_server.py`):
 | `AGENTS.md` | Persistent instructions Claude reads as context |
 | `fl_transport.py` | Low-level MIDI transport via loopMIDI |
 | `music_api.py` | Note utilities and (legacy) FastAPI endpoints |
-| `fl_studio_script/device_FL_Agent_Controller.py` | FL Studio MIDI controller script |
+| `fl_studio_script/device_FL Agent Controller.py` | FL Studio MIDI controller script |
+| `fl_studio_script/FL Agent Controller.ini`       | Sidecar `.ini` required by FL Studio's Hardware folder |
 | `requirements.txt` | Python dependencies |
