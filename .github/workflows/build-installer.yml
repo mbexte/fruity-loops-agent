@@ -123,9 +123,20 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ steps.version.outputs.value }}"
-          Write-Host "Compiling installer version $version with: $env:ISCC_PATH"
+          Write-Host "ISCC path : $env:ISCC_PATH"
+          Write-Host "Version   : $version"
 
-          & $env:ISCC_PATH /DAppVersion=$version installer.iss
+          # Show what source files Inno Setup will find
+          Write-Host "--- dist\FL Agent listing ---"
+          Get-ChildItem "dist\FL Agent" -Recurse | Select-Object FullName | Write-Host
+          Write-Host "--- end listing ---"
+
+          # Run ISCC with a compilation log so errors are always captured
+          $logFile = "iscc-compile.log"
+          & $env:ISCC_PATH /DAppVersion=$version /LOG=$logFile installer.iss
+
+          # Always print the log so it appears in the Actions console
+          if (Test-Path $logFile) { Get-Content $logFile | Write-Host }
 
           if ($LASTEXITCODE -ne 0) {
             throw "Inno Setup compilation failed (exit code $LASTEXITCODE)"
@@ -155,6 +166,7 @@ jobs:
           path: |
             build/
             *.warn
+            iscc-compile.log
           retention-days: 7
 
   # ─── Release job (tag pushes only) ──────────────────────────────────────
