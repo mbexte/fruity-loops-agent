@@ -32,16 +32,11 @@ def note_to_midi(note_str: str) -> int:
 
 BAR_GRID = 0.0625
 MIN_DURATION_BARS = BAR_GRID
-RESERVED_MIDI_NOTES = {72, 74}
 
 
 def sanitize_midi_notes(notes):
-    sanitized = []
-    for note in notes:
-        while note in RESERVED_MIDI_NOTES:
-            note += 1
-        sanitized.append(note)
-    return sanitized
+    """Pass-through — no notes are reserved since control uses SysEx, not note messages."""
+    return list(notes)
 
 
 def normalize_duration_bars(duration: float) -> float:
@@ -186,7 +181,6 @@ def prompt_to_intent(prompt: MusicPrompt):
                         "All music must be in 4/4 time. Durations are bar fractions: 1.0 = one full bar, 0.5 = half note, 0.25 = quarter note, 0.125 = eighth note, 0.0625 = sixteenth note. "
                         "Do not use durations smaller than 0.0625 bars. The total bar duration should form valid 4/4 measures. If you generate 4 bars, the total duration must equal exactly 4.0 bars. "
                         "Do not use seconds to describe note lengths. Only emit durations in bars. "
-                        "Avoid using C5 or D5, because those notes are reserved for recording start and stop control. "
                         "It is allowed to layer voices: for a top lead over a bass line or chord progression, output a note array containing both low bass notes and high lead notes with the same duration. "
                         "Ensure the rhythm is valid in 4/4 and the note durations combine naturally to form measures. "
                         "If the prompt mentions a specific song, artist, genre, bass line, top lead, or chords, incorporate that into the melody_pattern, "

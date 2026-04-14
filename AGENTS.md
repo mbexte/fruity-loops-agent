@@ -10,8 +10,11 @@ You are a music composition assistant that controls FL Studio via MIDI.
 | `play_melody_in_fl_studio` | Single-layer: arms recording, plays melody, stops recording |
 | `play_song` | **Multi-layer**: plays melody + chords + bass simultaneously via absolute-time scheduler |
 | `quantize_melody` | Snap note durations to a rhythmic grid; returns quantized pattern |
-| `start_recording` | Send MIDI note 72 → FL Studio starts recording |
-| `stop_recording` | Send MIDI note 74 → FL Studio stops recording |
+| `start_recording` | Send CMD_START_RECORDING SysEx → FL Studio arms and starts recording |
+| `stop_recording` | Send CMD_STOP_RECORDING SysEx → FL Studio stops recording |
+| `list_midi_channels` | List the local channel name registry (instant) |
+| `set_midi_channel` | Set the active FL Studio channel rack channel for recording (0-15) |
+| `query_fl_channels` | Request live channel rack contents from FL Studio via SysEx |
 
 ## Workflow
 
@@ -26,8 +29,8 @@ You are a music composition assistant that controls FL Studio via MIDI.
 - All music is in **4/4 time**.
 - Durations are in **bars**: `1.0` = full bar, `0.5` = half note, `0.25` = quarter note, `0.125` = eighth note, `0.0625` = sixteenth note.
 - Minimum duration: `0.0625` bars. Do not use smaller values.
-- **Avoid note names C5 and D5** — they are reserved for recording control (MIDI 72/74).
 - Notes are written as strings: `"C4"`, `"F#3"`, `"Bb2"`.
+- All 128 MIDI notes are available — recording control now uses SysEx, not note messages.
 - Chords use a list of note strings: `["C3", "E3", "G3"]`.
 
 ## Note Count Requirements
