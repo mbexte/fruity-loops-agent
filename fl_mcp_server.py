@@ -5,9 +5,11 @@ Tools:
   open_fl_studio           — Launch FL Studio
   play_melody_in_fl_studio — Single-layer: arm recording, play melody, stop recording
   play_song                — Multi-layer: melody + chords + bass via absolute-time scheduler
-  start_recording          — Send MIDI note 72 (start recording)
-  stop_recording           — Send MIDI note 74 (stop recording)
+  start_recording          — Send CMD_START_RECORDING SysEx (arm + start recording)
+  stop_recording           — Send CMD_STOP_RECORDING SysEx (stop recording)
   quantize_melody          — Snap note durations to a rhythmic grid
+  list_midi_channels       — List all 16 MIDI channels with names and active status
+  set_midi_channel         — Set the active MIDI channel for recording (0-15)
 
 Run standalone (used by Claude Code / agent.py via MCP):
   python fl_mcp_server.py
@@ -27,6 +29,7 @@ from mcp.server.stdio import stdio_server
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fl_transport
 from midi_scheduler import play_song as _play_song
+from fl_transport import list_channels as _list_channels, set_active_channel as _set_active_channel
 from music_api import note_to_midi, sanitize_midi_notes, normalize_melody_pattern, quantize_melody_pattern
 
 # ---------------------------------------------------------------------------
@@ -217,6 +220,39 @@ async def list_tools() -> list[types.Tool]:
                 "required": ["tempo", "layers"],
             },
         ),
+        types.Tool(
+            name="list_midi_channels",
+            description=(
+                "List all 16 MIDI channels with their human-readable names and which one is "
+                "currently active for recording. Use this before set_midi_channel to see the "
+                "available options."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        types.Tool(
+            name="set_midi_channel",
+            description=(
+                "Set the active MIDI channel for recording (0-15). Sends a CMD_SET_CHANNEL "
+                "SysEx message to FL Studio so the correct instrument/channel is armed. "
+                "Call list_midi_channels first to see available channels and their names."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "channel": {
+                        "type": "integer",
+                        "description": (
+                            "MIDI channel number 0-15. "
+                            "0=Melody, 1=Chords, 2=Bass, 3=Drums, 4=Pad, 5=Lead, "
+                            "6=Arp, 7=FX, 8-15=Aux 1-8."
+                        ),
+                        "minimum": 0,
+                        "maximum": 15,
+                    }
+                },
+                "required": ["channel"],
+            },
+        ),
     ]
 
 
@@ -320,6 +356,31 @@ async def call_tool(
             type="text",
             text=json.dumps({"grid_bars": grid_bars, "melody_pattern": quantized}, indent=2),
         )]
+
+    elif name == "list_midi_channels":
+        import json
+        channels = _list_channels()
+        return [types.TextContent(
+            type="text",
+            text=json.dumps(channels, indent=2),
+        )]
+
+    elif name == "set_midi_channel":
+        channel = int(arguments.get("channel", 0))
+        try:
+            await asyncio.get_event_loop().run_in_executor(
+                None, _set_active_channel, channel
+            )
+            from midi_scheduler import CHANNEL_REGISTRY
+            name_str = CHANNEL_REGISTRY.get(channel, f"Channel {channel}")
+            return [types.TextContent(
+                type="text",
+                text=f"Active recording channel set to {channel} ({name_str}).",
+            )]
+        except ValueError as exc:
+            return [types.TextContent(type="text", text=f"ERROR: {exc}")]
+        except Exception as exc:
+            return [types.TextContent(type="text", text=f"ERROR: {exc}")]
 
     return [types.TextContent(type="text", text=f"Unknown tool: {name}")]
 

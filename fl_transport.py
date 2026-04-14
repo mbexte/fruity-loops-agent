@@ -1,11 +1,21 @@
 """
 fl_transport.py — MIDI communication with FL Studio via loopMIDI.
 
-  Note 72 (C5) → Start recording
-  Note 74 (D5) → Stop recording
+SysEx control protocol (matches midi_scheduler.py and FL Studio script):
 
-  play_melody(intent) — single-layer playback (legacy API, delegates to scheduler)
-  play_song(intent)   — multi-layer playback via the absolute-time scheduler
+    Frame:  0xF0  SYSEX_MANUFACTURER  SYSEX_DEVICE_ID  CMD  [DATA…]  0xF7
+
+    CMD_START_RECORDING (0x01) — arm FL Studio recording, start transport
+    CMD_STOP_RECORDING  (0x02) — stop FL Studio transport
+    CMD_SET_CHANNEL     (0x03) — set active MIDI recording channel; DATA = [channel 0-15]
+
+Public API:
+  start_recording()           — send CMD_START_RECORDING
+  stop_recording()            — send CMD_STOP_RECORDING
+  list_channels()             — return all 16 channels with names and active status
+  set_active_channel(channel) — select channel 0-15 for recording (sends CMD_SET_CHANNEL)
+  play_melody(intent)         — single-layer playback (legacy API, delegates to scheduler)
+  play_song(intent)           — multi-layer playback via the absolute-time scheduler
 
 Requirements:
   loopMIDI running with a port named "FL Agent".
@@ -20,11 +30,12 @@ import sys
 import mido
 
 from midi_scheduler import (
-    DEFAULT_VELOCITY,
-    NOTE_START,
-    NOTE_STOP,
+    CMD_START_RECORDING,
+    CMD_STOP_RECORDING,
     _get_port,
-    _control,
+    _send_command,
+    list_channels,
+    set_active_channel,
     play_song,
     preview_song,
 )
@@ -33,6 +44,8 @@ from midi_scheduler import (
 __all__ = [
     "start_recording",
     "stop_recording",
+    "list_channels",
+    "set_active_channel",
     "play_melody",
     "play_song",
     "preview_song",
@@ -40,16 +53,16 @@ __all__ = [
 
 
 def start_recording() -> None:
-    """Send MIDI note 72 (C5) → FL Studio arms and starts recording."""
+    """Send CMD_START_RECORDING SysEx → FL Studio arms and starts recording."""
     with mido.open_output(_get_port()) as port:
-        _control(port, NOTE_START)
+        _send_command(port, CMD_START_RECORDING)
     print("FL Studio: recording started")
 
 
 def stop_recording() -> None:
-    """Send MIDI note 74 (D5) → FL Studio stops recording."""
+    """Send CMD_STOP_RECORDING SysEx → FL Studio stops recording."""
     with mido.open_output(_get_port()) as port:
-        _control(port, NOTE_STOP)
+        _send_command(port, CMD_STOP_RECORDING)
     print("FL Studio: recording stopped")
 
 
@@ -59,7 +72,7 @@ def play_melody(intent: dict) -> None:
     Delegates to midi_scheduler.play_song() for accurate absolute-time scheduling.
 
     intent keys:
-      tempo          (int)       — BPM
+      tempo          (int)        — BPM
       melody_pattern (list[dict]) — dicts with note (MIDI number or name) and duration (bars)
     """
     play_song(intent, send_to_fl=True)

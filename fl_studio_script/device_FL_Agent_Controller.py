@@ -7,22 +7,38 @@
 #   enable the "FL Agent" port, and set its Controller type to
 #   "FL Agent Controller".
 #
-# Usage:
-#   Send MIDI note 72 (C5) → starts recording (arms record + starts transport)
-#   Send MIDI note 74 (D5) → stops recording (stops transport)
+# SysEx control protocol (must match midi_scheduler.py):
+#
+#   Every message is a SysEx frame:
+#       0xF0  SYSEX_MANUFACTURER  SYSEX_DEVICE_ID  CMD  [DATA…]  0xF7
+#
+#   CMD 0x01  CMD_START_RECORDING — arm record + start transport
+#   CMD 0x02  CMD_STOP_RECORDING  — stop transport
+#   CMD 0x03  CMD_SET_CHANNEL     — DATA[0] = MIDI channel (0-15)
 
 import midi
 import transport
+import channels
 import ui
 
 # ---------------------------------------------------------------------------
-# Configuration
+# Protocol constants  (must stay in sync with midi_scheduler.py)
 # ---------------------------------------------------------------------------
 
-NOTE_START_RECORDING = 72   # C5
-NOTE_STOP_RECORDING  = 74   # D5
+SYSEX_MANUFACTURER  = 0x7D   # Non-commercial / educational manufacturer ID
+SYSEX_DEVICE_ID     = 0x01   # FL Agent device identifier
+
+CMD_START_RECORDING = 0x01
+CMD_STOP_RECORDING  = 0x02
+CMD_SET_CHANNEL     = 0x03
 
 SCRIPT_NAME = "FL Agent Controller"
+
+# ---------------------------------------------------------------------------
+# State
+# ---------------------------------------------------------------------------
+
+_active_channel: int = 0   # MIDI channel currently selected for recording
 
 # ---------------------------------------------------------------------------
 # Lifecycle callbacks
@@ -30,8 +46,10 @@ SCRIPT_NAME = "FL Agent Controller"
 
 def OnInit():
     print(f"{SCRIPT_NAME} loaded.")
-    print(f"  Note {NOTE_START_RECORDING} (C5) → START recording")
-    print(f"  Note {NOTE_STOP_RECORDING}  (D5) → STOP  recording")
+    print("  SysEx protocol:  0xF0 0x7D 0x01 CMD [DATA…] 0xF7")
+    print(f"  CMD {CMD_START_RECORDING:#04x}  → START recording")
+    print(f"  CMD {CMD_STOP_RECORDING:#04x}  → STOP  recording")
+    print(f"  CMD {CMD_SET_CHANNEL:#04x}  → SET active channel  (DATA[0] = 0-15)")
     ui.setHintMsg(f"{SCRIPT_NAME} ready")
 
 
@@ -40,43 +58,55 @@ def OnDeInit():
 
 
 # ---------------------------------------------------------------------------
-# MIDI message handler
+# SysEx message handler
 # ---------------------------------------------------------------------------
 
-def OnMidiMsg(event):
-    """Called by FL Studio for every incoming MIDI message on this device."""
+def OnSysEx(event):
+    """Parse and dispatch FL Agent SysEx control messages.
 
-    # Only act on Note-On messages with non-zero velocity.
-    # Note-Off messages arrive either as midiId 0x80 (MIDI_NOTEOFF)
-    # or as midiId 0x90 with velocity 0 — both are ignored here.
-    is_note_on = (event.midiId == midi.MIDI_NOTEON) and (event.velocity > 0)
-    if not is_note_on:
+    Expected frame (bytes, including start/end):
+        0xF0  SYSEX_MANUFACTURER  SYSEX_DEVICE_ID  CMD  [DATA…]  0xF7
+
+    The method validates the manufacturer/device IDs before dispatching so
+    that unrelated SysEx traffic is silently ignored.
+    """
+    data = list(event.sysex)   # convert bytes/tuple to a plain list of ints
+
+    # Minimum valid frame: [F0, MFR, DEV, CMD, F7] = 5 bytes
+    if len(data) < 5:
         return
+    if data[0] != 0xF0 or data[-1] != 0xF7:
+        return
+    if data[1] != SYSEX_MANUFACTURER or data[2] != SYSEX_DEVICE_ID:
+        return   # not our message — ignore silently
 
-    if event.note == NOTE_START_RECORDING:
-        event.handled = True
+    cmd     = data[3]
+    payload = data[4:-1]   # bytes between CMD and the trailing 0xF7
+
+    event.handled = True
+
+    if cmd == CMD_START_RECORDING:
         _start_recording()
-
-    elif event.note == NOTE_STOP_RECORDING:
-        event.handled = True
+    elif cmd == CMD_STOP_RECORDING:
         _stop_recording()
+    elif cmd == CMD_SET_CHANNEL:
+        if payload:
+            _set_channel(payload[0])
 
 
 # ---------------------------------------------------------------------------
-# Transport helpers
+# Transport / channel helpers
 # ---------------------------------------------------------------------------
 
 def _start_recording():
     """Arm record mode and start the transport."""
-    # Arm recording if not already armed.
     if not transport.isRecording():
         transport.record()
 
-    # Start playback (begins the actual recording).
     if not transport.isPlaying():
         transport.start()
 
-    msg = f"{SCRIPT_NAME}: Recording STARTED"
+    msg = f"{SCRIPT_NAME}: Recording STARTED (ch {_active_channel})"
     ui.setHintMsg(msg)
     print(msg)
 
@@ -87,5 +117,17 @@ def _stop_recording():
         transport.stop()
 
     msg = f"{SCRIPT_NAME}: Recording STOPPED"
+    ui.setHintMsg(msg)
+    print(msg)
+
+
+def _set_channel(channel: int):
+    """Update the active recording channel."""
+    global _active_channel
+    if not 0 <= channel <= 15:
+        print(f"{SCRIPT_NAME}: Invalid channel {channel} (must be 0-15)")
+        return
+    _active_channel = channel
+    msg = f"{SCRIPT_NAME}: Active channel → {channel}"
     ui.setHintMsg(msg)
     print(msg)
