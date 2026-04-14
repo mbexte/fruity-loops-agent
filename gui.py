@@ -175,6 +175,7 @@ class FLAgentGUI:
         self._confirm_evt    = threading.Event()   # starts unset
         self._confirm_result: str | None = None
         self._pending_intent: dict | None = None
+        self._preview_stop:   threading.Event | None = None
 
         self._in_stream = False
         self._recording = False
@@ -319,8 +320,15 @@ class FLAgentGUI:
     def _on_preview(self) -> None:
         if self._pending_intent is None:
             return
+        # Stop any currently-running preview before starting a new one.
+        if self._preview_stop is not None:
+            self._preview_stop.set()
+        stop = threading.Event()
+        self._preview_stop = stop
         intent = self._pending_intent
-        threading.Thread(target=preview_song, args=(intent,), daemon=True).start()
+        threading.Thread(
+            target=preview_song, args=(intent,), kwargs={"stop_event": stop}, daemon=True
+        ).start()
 
     def _on_confirm(self) -> None:
         with self._confirm_lock:
@@ -348,14 +356,16 @@ class FLAgentGUI:
         tempo  = intent.get("tempo", 120)
         layers = intent.get("layers") or {"melody": intent.get("melody_pattern", [])}
 
+        # Add the frame first so the canvas has real pixel dimensions before drawing.
+        if not self.preview_f.winfo_ismapped():
+            self.pane.add(self.preview_f, weight=2)
+            self.root.update_idletasks()
+
         self.piano_roll.set_data(events_by_layer, tempo)
         n_total = sum(len(v) for v in layers.values())
         self.info_lbl.configure(
             text=f"Tempo: {tempo} BPM  •  Layers: {', '.join(layers)}  •  {n_total} notes"
         )
-
-        if not self.preview_f.winfo_ismapped():
-            self.pane.add(self.preview_f, weight=2)
 
     def _hide_preview(self) -> None:
         if self.preview_f.winfo_ismapped():

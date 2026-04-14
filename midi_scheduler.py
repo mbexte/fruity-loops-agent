@@ -17,6 +17,7 @@ Timing strategy:
   - Zero timing drift because every dispatch checks against the same t0.
 """
 
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Literal
@@ -31,6 +32,9 @@ NOTE_STOP        = 74     # D5 → stop FL Studio recording
 DEFAULT_CHANNEL  = 0
 DEFAULT_VELOCITY = 100
 RESERVED_NOTES   = frozenset({NOTE_START, NOTE_STOP})
+
+SYSEX_MANF_ID    = 0x7D   # non-commercial manufacturer ID (mirrors device script)
+CMD_PATTERN_CLEAR = 0x11  # SysEx: erase all notes from a pattern slot
 
 LOOKAHEAD_S  = 0.020   # 20 ms look-ahead window (compensates for OS jitter)
 SPIN_MARGIN  = 0.001   # spin only for the final 1 ms before dispatch
@@ -156,7 +160,22 @@ def build_song(
 
 # ── scheduler ─────────────────────────────────────────────────────────────────
 
-def run_scheduler(events: list[MidiEvent], port: mido.ports.BaseOutput) -> None:
+def _all_notes_off(port) -> None:
+    """Send CC 123 (all notes off) on all 16 channels to silence lingering notes."""
+    for ch in range(16):
+        port.send(mido.Message("control_change", channel=ch, control=123, value=0))
+
+
+def _clear_pattern(port, slot: int = 0) -> None:
+    """Send SysEx PATTERN_CLEAR so FL Studio erases the slot before recording new notes."""
+    port.send(mido.Message("sysex", data=bytes([SYSEX_MANF_ID, CMD_PATTERN_CLEAR, slot & 0x7F])))
+
+
+def run_scheduler(
+    events: list[MidiEvent],
+    port: mido.ports.BaseOutput,
+    stop_event: threading.Event | None = None,
+) -> None:
     """Dispatch MIDI events with sub-millisecond timing accuracy.
 
     Algorithm:
@@ -178,6 +197,10 @@ def run_scheduler(events: list[MidiEvent], port: mido.ports.BaseOutput) -> None:
     idx   = 0
 
     while idx < total:
+        if stop_event is not None and stop_event.is_set():
+            _all_notes_off(port)
+            return
+
         now        = time.perf_counter() - t0
         target     = events[idx].time
         until_abs  = t0 + target
@@ -206,7 +229,12 @@ def run_scheduler(events: list[MidiEvent], port: mido.ports.BaseOutput) -> None:
 
 # ── high-level entry points ───────────────────────────────────────────────────
 
-def play_song(intent: dict, *, send_to_fl: bool = True) -> None:
+def play_song(
+    intent: dict,
+    *,
+    send_to_fl: bool = True,
+    stop_event: threading.Event | None = None,
+) -> None:
     """Build all MIDI events and dispatch them via the absolute-time scheduler.
 
     Accepted intent formats:
@@ -226,6 +254,7 @@ def play_song(intent: dict, *, send_to_fl: bool = True) -> None:
 
     send_to_fl=True  → wrap in NOTE_START / NOTE_STOP (triggers FL Studio recording)
     send_to_fl=False → preview-only; no side-effects in FL Studio
+    stop_event       → set to interrupt playback early and silence all notes
     """
     tempo  = int(intent.get("tempo", 120))
     layers = intent.get("layers")
@@ -239,17 +268,24 @@ def play_song(intent: dict, *, send_to_fl: bool = True) -> None:
         return
 
     with mido.open_output(_get_port()) as port:
+        # Silence any lingering notes from a previous preview before starting.
+        _all_notes_off(port)
+
         if send_to_fl:
+            _clear_pattern(port, slot=0)
+            time.sleep(0.05)   # let FL Studio process the clear before arming record
             _control(port, NOTE_START)
+            # Give FL Studio time to enter record mode before the first note arrives.
+            time.sleep(0.15)
             print("FL Studio: recording STARTED")
 
-        run_scheduler(events, port)
+        run_scheduler(events, port, stop_event=stop_event)
 
         if send_to_fl:
             _control(port, NOTE_STOP)
             print("FL Studio: recording STOPPED")
 
 
-def preview_song(intent: dict) -> None:
+def preview_song(intent: dict, stop_event: threading.Event | None = None) -> None:
     """Play back without arming FL Studio recording (safe for local preview)."""
-    play_song(intent, send_to_fl=False)
+    play_song(intent, send_to_fl=False, stop_event=stop_event)
