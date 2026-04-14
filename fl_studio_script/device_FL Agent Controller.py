@@ -2,15 +2,22 @@
 #
 # Installation:
 #   Copy this file to:
-#     Documents\Image-Line\FL Studio\Settings\Hardware\
+#     Documents\Image-Line\FL Studio\Settings\Hardware\FL Agent Controller\
+#   and copy "FL Agent Controller.ini" next to that folder.
 #   Restart FL Studio, then go to Options → MIDI Settings → Input,
 #   enable the "FL Agent" port, and set its Controller type to
 #   "FL Agent Controller".
 #
 # Usage:
-#   Send MIDI note 72 (C5) → starts recording (arms record + starts transport)
-#   Send MIDI note 74 (D5) → stops recording (stops transport)
+#   Send MIDI note 72 (C5) → starts recording
+#   Send MIDI note 74 (D5) → stops recording
+#   Send MIDI note 76 (E5) → dumps channel list to %TEMP%\fl_agent_channels.json
 
+import json
+import os
+import tempfile
+
+import channels
 import midi
 import transport
 import ui
@@ -21,8 +28,10 @@ import ui
 
 NOTE_START_RECORDING = 72   # C5
 NOTE_STOP_RECORDING  = 74   # D5
+NOTE_LIST_CHANNELS   = 76   # E5
 
 SCRIPT_NAME = "FL Agent Controller"
+CHANNELS_OUTPUT_FILE = os.path.join(tempfile.gettempdir(), "fl_agent_channels.json")
 
 # ---------------------------------------------------------------------------
 # Lifecycle callbacks
@@ -30,8 +39,9 @@ SCRIPT_NAME = "FL Agent Controller"
 
 def OnInit():
     print(f"{SCRIPT_NAME} loaded.")
-    print(f"  Note {NOTE_START_RECORDING} (C5) → START recording")
-    print(f"  Note {NOTE_STOP_RECORDING}  (D5) → STOP  recording")
+    print(f"  Note {NOTE_START_RECORDING} (C5) -> START recording")
+    print(f"  Note {NOTE_STOP_RECORDING}  (D5) -> STOP  recording")
+    print(f"  Note {NOTE_LIST_CHANNELS}  (E5) -> LIST  channels -> {CHANNELS_OUTPUT_FILE}")
     ui.setHintMsg(f"{SCRIPT_NAME} ready")
 
 
@@ -44,11 +54,6 @@ def OnDeInit():
 # ---------------------------------------------------------------------------
 
 def OnMidiMsg(event):
-    """Called by FL Studio for every incoming MIDI message on this device."""
-
-    # Only act on Note-On messages with non-zero velocity.
-    # Note-Off messages arrive either as midiId 0x80 (MIDI_NOTEOFF)
-    # or as midiId 0x90 with velocity 0 — both are ignored here.
     is_note_on = (event.midiId == midi.MIDI_NOTEON) and (event.velocity > 0)
     if not is_note_on:
         return
@@ -61,18 +66,18 @@ def OnMidiMsg(event):
         event.handled = True
         _stop_recording()
 
+    elif event.note == NOTE_LIST_CHANNELS:
+        event.handled = True
+        _list_channels()
+
 
 # ---------------------------------------------------------------------------
 # Transport helpers
 # ---------------------------------------------------------------------------
 
 def _start_recording():
-    """Arm record mode and start the transport."""
-    # Arm recording if not already armed.
     if not transport.isRecording():
         transport.record()
-
-    # Start playback (begins the actual recording).
     if not transport.isPlaying():
         transport.start()
 
@@ -82,10 +87,27 @@ def _start_recording():
 
 
 def _stop_recording():
-    """Stop the transport (recording stops automatically)."""
     if transport.isPlaying():
         transport.stop()
 
     msg = f"{SCRIPT_NAME}: Recording STOPPED"
+    ui.setHintMsg(msg)
+    print(msg)
+
+
+# ---------------------------------------------------------------------------
+# Channel listing
+# ---------------------------------------------------------------------------
+
+def _list_channels():
+    """Dump the current channel rack to a JSON file the host can read back."""
+    data = [
+        {"index": i, "name": channels.getChannelName(i)}
+        for i in range(channels.channelCount())
+    ]
+    with open(CHANNELS_OUTPUT_FILE, "w") as fh:
+        json.dump(data, fh)
+
+    msg = f"{SCRIPT_NAME}: listed {len(data)} channels"
     ui.setHintMsg(msg)
     print(msg)

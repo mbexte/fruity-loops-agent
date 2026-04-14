@@ -52,7 +52,8 @@ Name: "configurevscode"; Description: "Write VS Code MCP config for GitHub Copil
 ; ============================================================================
 [Files]
 Source: "dist\FL Agent\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "fl_studio_script\device_FL_Agent_Controller.py"; DestDir: "{app}\fl_studio_script"; Flags: ignoreversion
+Source: "fl_studio_script\device_FL Agent Controller.py"; DestDir: "{app}\fl_studio_script"; Flags: ignoreversion
+Source: "fl_studio_script\FL Agent Controller.ini";       DestDir: "{app}\fl_studio_script"; Flags: ignoreversion
 
 ; ============================================================================
 [Icons]
@@ -129,13 +130,22 @@ begin
   begin
     HardwareDir := FindFLStudioHardwareDir();
     if HardwareDir <> '' then
-      FileCopy(AppPath + '\fl_studio_script\device_FL_Agent_Controller.py',
-               HardwareDir + '\device_FL_Agent_Controller.py', False)
+    begin
+      // FL Studio expects each controller as a subfolder of Hardware, with a
+      // sibling <Name>.ini file next to it. Mirror that layout here.
+      if not DirExists(HardwareDir + '\FL Agent Controller') then
+        CreateDir(HardwareDir + '\FL Agent Controller');
+      FileCopy(AppPath + '\fl_studio_script\device_FL Agent Controller.py',
+               HardwareDir + '\FL Agent Controller\device_FL Agent Controller.py', False);
+      FileCopy(AppPath + '\fl_studio_script\FL Agent Controller.ini',
+               HardwareDir + '\FL Agent Controller.ini', False);
+    end
     else
       MsgBox(
         'FL Studio Hardware folder not found.' + #13#10#13#10 +
-        'Copy this file there manually after installing FL Studio:' + #13#10 +
-        AppPath + '\fl_studio_script\device_FL_Agent_Controller.py' + #13#10#13#10 +
+        'Copy these files there manually after installing FL Studio:' + #13#10 +
+        AppPath + '\fl_studio_script\device_FL Agent Controller.py' + #13#10 +
+        AppPath + '\fl_studio_script\FL Agent Controller.ini' + #13#10#13#10 +
         'Then restart FL Studio, open Options > MIDI Settings > Input,' + #13#10 +
         'enable the "FL Agent" port and set its controller to' + #13#10 +
         '"FL Agent Controller".',
