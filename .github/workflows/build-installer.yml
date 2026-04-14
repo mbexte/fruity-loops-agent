@@ -37,7 +37,7 @@ jobs:
     steps:
       # ── Checkout ──────────────────────────────────────────────────────────
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
 
       # ── Resolve version string ─────────────────────────────────────────────
       - name: Resolve version
@@ -56,7 +56,7 @@ jobs:
 
       # ── Python setup ──────────────────────────────────────────────────────
       - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v5.4.0
         with:
           python-version: "3.11"
           cache: pip
@@ -93,20 +93,39 @@ jobs:
           Copy-Item $mcpExe "$appDir\fl_mcp_server.exe" -Force
           Write-Host "Build output OK — MCP server copied into app folder."
 
-      # ── Install Inno Setup 6 ───────────────────────────────────────────────
-      - name: Install Inno Setup 6
-        shell: cmd
-        run: choco install innosetup --version=6.3.3 -y --no-progress
+      # ── Install Inno Setup (latest available via Chocolatey) ──────────────
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Chocolatey install failed — falling back to direct download"
+            $url = "https://files.jrsoftware.org/is/6/innosetup-6.3.3.exe"
+            $tmp = "$env:TEMP\innosetup-setup.exe"
+            Write-Host "Downloading $url ..."
+            Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing
+            Start-Process -Wait -FilePath $tmp `
+              -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-"
+          }
+          # Locate ISCC.exe regardless of installed version (6.x or 7.x)
+          $iscc = Get-ChildItem "C:\Program Files (x86)\Inno Setup *\ISCC.exe" `
+                    -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (!$iscc) {
+            $iscc = Get-ChildItem "C:\Program Files\Inno Setup *\ISCC.exe" `
+                      -ErrorAction SilentlyContinue | Select-Object -First 1
+          }
+          if (!$iscc) { throw "ISCC.exe not found after Inno Setup installation" }
+          Write-Host "Found ISCC: $($iscc.FullName)"
+          "ISCC_PATH=$($iscc.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       # ── Compile installer ─────────────────────────────────────────────────
       - name: Compile installer with Inno Setup
         shell: pwsh
         run: |
-          $iscc    = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           $version = "${{ steps.version.outputs.value }}"
+          Write-Host "Compiling installer version $version with: $env:ISCC_PATH"
 
-          Write-Host "Compiling installer version $version ..."
-          & $iscc /DAppVersion=$version installer.iss
+          & $env:ISCC_PATH /DAppVersion=$version installer.iss
 
           if ($LASTEXITCODE -ne 0) {
             throw "Inno Setup compilation failed (exit code $LASTEXITCODE)"
@@ -121,7 +140,7 @@ jobs:
 
       # ── Upload artifact ───────────────────────────────────────────────────
       - name: Upload installer artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: FL-Agent-Setup-${{ steps.version.outputs.value }}-${{ github.sha }}
           path: Output/FL_Agent_Setup.exe
@@ -130,7 +149,7 @@ jobs:
       # ── Upload logs on failure ────────────────────────────────────────────
       - name: Upload build logs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: build-logs-${{ github.sha }}
           path: |
@@ -150,7 +169,7 @@ jobs:
 
     steps:
       - name: Download installer artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v4.3.0
         with:
           name: FL-Agent-Setup-${{ needs.build.outputs.version }}-${{ github.sha }}
           path: release-assets/
