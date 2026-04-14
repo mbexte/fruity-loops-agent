@@ -1,0 +1,251 @@
+name: Build Windows Installer
+
+# ─── Triggers ──────────────────────────────────────────────────────────────
+on:
+  push:
+    branches:
+      - master
+      - "claude/**"
+    tags:
+      - "v*.*.*"        # e.g. v1.2.3 → also creates a GitHub Release
+
+  pull_request:
+    branches:
+      - master
+
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. 1.2.3 — omit the leading 'v')"
+        required: false
+        default: "1.0.0"
+
+# ─── Concurrency ───────────────────────────────────────────────────────────
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# ─── Jobs ──────────────────────────────────────────────────────────────────
+jobs:
+  build:
+    name: Build setup.exe
+    runs-on: windows-latest
+
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+
+    steps:
+      # ── Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4.2.2
+
+      # ── Resolve version string ─────────────────────────────────────────────
+      - name: Resolve version
+        id: version
+        shell: pwsh
+        run: |
+          if ("${{ github.ref }}" -match "^refs/tags/v(.+)$") {
+            $v = $Matches[1]
+          } elseif ("${{ github.event.inputs.version }}" -ne "") {
+            $v = "${{ github.event.inputs.version }}"
+          } else {
+            $v = "1.0.0"
+          }
+          Write-Host "Version: $v"
+          "value=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      # ── Python setup ──────────────────────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5.4.0
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # ── Install Python dependencies ────────────────────────────────────────
+      - name: Install Python dependencies
+        shell: cmd
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install "pyinstaller>=6.0"
+
+      # ── Build executables ─────────────────────────────────────────────────
+      - name: Build with PyInstaller
+        shell: cmd
+        run: pyinstaller fl_agent.spec --clean --noconfirm
+
+      # ── Verify build & assemble dist folder ───────────────────────────────
+      - name: Verify and assemble build output
+        shell: pwsh
+        run: |
+          $appDir   = "dist\FL Agent"
+          $mcpExe   = "dist\fl_mcp_server.exe"
+
+          if (!(Test-Path "$appDir\FL Agent.exe")) {
+            throw "FL Agent.exe not found — PyInstaller GUI build failed"
+          }
+          if (!(Test-Path $mcpExe)) {
+            throw "fl_mcp_server.exe not found — PyInstaller server build failed"
+          }
+
+          # Place the standalone MCP server EXE inside the app directory
+          # so Inno Setup can bundle them together.
+          Copy-Item $mcpExe "$appDir\fl_mcp_server.exe" -Force
+          Write-Host "Build output OK — MCP server copied into app folder."
+
+      # ── Install Inno Setup (latest available via Chocolatey) ──────────────
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Chocolatey install failed — falling back to direct download"
+            $url = "https://files.jrsoftware.org/is/6/innosetup-6.3.3.exe"
+            $tmp = "$env:TEMP\innosetup-setup.exe"
+            Write-Host "Downloading $url ..."
+            Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing
+            Start-Process -Wait -FilePath $tmp `
+              -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-"
+          }
+          # Locate ISCC.exe regardless of installed version (6.x or 7.x)
+          $iscc = Get-ChildItem "C:\Program Files (x86)\Inno Setup *\ISCC.exe" `
+                    -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (!$iscc) {
+            $iscc = Get-ChildItem "C:\Program Files\Inno Setup *\ISCC.exe" `
+                      -ErrorAction SilentlyContinue | Select-Object -First 1
+          }
+          if (!$iscc) { throw "ISCC.exe not found after Inno Setup installation" }
+          Write-Host "Found ISCC: $($iscc.FullName)"
+          "ISCC_PATH=$($iscc.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      # ── Diagnostics before compile ────────────────────────────────────────
+      - name: Pre-compile diagnostics
+        shell: pwsh
+        run: |
+          $diag = @()
+          $diag += "=== CWD: $(Get-Location) ==="
+          $diag += "=== ISCC_PATH: '$env:ISCC_PATH' ==="
+          if ($env:ISCC_PATH -and (Test-Path $env:ISCC_PATH)) {
+            $diag += "ISCC exists: YES"
+            $ver = & $env:ISCC_PATH /? 2>&1 | Select-Object -First 3
+            $diag += "ISCC version: $ver"
+          } else {
+            $diag += "ISCC NOT FOUND — searching..."
+            $found = Get-ChildItem "C:\Program Files*\Inno Setup*" -ErrorAction SilentlyContinue
+            $diag += "Inno Setup dirs: $found"
+          }
+          $diag += "=== dist\ ==="
+          if (Test-Path "dist") {
+            Get-ChildItem "dist" -Recurse -Depth 2 | ForEach-Object { $diag += $_.FullName }
+          } else {
+            $diag += "dist\ MISSING"
+          }
+          $diag += "=== installer.iss ==="
+          Get-Content installer.iss | ForEach-Object { $diag += $_ }
+
+          # Write to console AND to a file uploaded as artifact
+          $diag | ForEach-Object { Write-Host $_ }
+          $diag | Out-File "diag.txt" -Encoding utf8
+
+      # ── Compile installer ─────────────────────────────────────────────────
+      - name: Compile installer with Inno Setup
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.value }}"
+          Write-Host "ISCC : $env:ISCC_PATH"
+          Write-Host "Version: $version"
+
+          # Capture ISCC stdout+stderr so we can echo it and write to summary
+          $isccOut = & $env:ISCC_PATH /DAppVersion=$version installer.iss 2>&1 | Out-String
+          $rc = $LASTEXITCODE
+
+          Write-Host "=== ISCC output ==="
+          Write-Host $isccOut
+
+          if ($rc -ne 0) {
+            # Also write to step summary — visible on the run page without auth
+            "## Inno Setup Failed (exit $rc)" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+            '```' | Out-File -Append $env:GITHUB_STEP_SUMMARY
+            $isccOut | Out-File -Append $env:GITHUB_STEP_SUMMARY
+            '```' | Out-File -Append $env:GITHUB_STEP_SUMMARY
+            throw "Inno Setup compilation failed (exit code $rc)"
+          }
+
+          $installer = "Output\FL_Agent_Setup.exe"
+          if (!(Test-Path $installer)) {
+            throw "Expected output file not found: $installer"
+          }
+          $sizeMB = [math]::Round((Get-Item $installer).Length / 1MB, 1)
+          Write-Host "Installer ready: $installer ($sizeMB MB)"
+
+      # ── Upload artifact ───────────────────────────────────────────────────
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: FL-Agent-Setup-${{ steps.version.outputs.value }}-${{ github.sha }}
+          path: Output/FL_Agent_Setup.exe
+          retention-days: 30
+
+      # ── Always upload diagnostics ─────────────────────────────────────────
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: diagnostics-${{ github.sha }}
+          path: diag.txt
+          retention-days: 7
+
+      # ── Upload build logs on failure ──────────────────────────────────────
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: build-logs-${{ github.sha }}
+          path: |
+            build/
+            *.warn
+          retention-days: 7
+
+  # ─── Release job (tag pushes only) ──────────────────────────────────────
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download installer artifact
+        uses: actions/download-artifact@v4.3.0
+        with:
+          name: FL-Agent-Setup-${{ needs.build.outputs.version }}-${{ github.sha }}
+          path: release-assets/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "FL Agent v${{ needs.build.outputs.version }}"
+          body: |
+            ## FL Agent v${{ needs.build.outputs.version }}
+
+            ### What's included
+            - **FL Agent.exe** — AI-powered music composition GUI (Tkinter + OpenRouter)
+            - **fl_mcp_server.exe** — MCP server for Claude Code / GitHub Copilot integration
+            - **FL Studio controller script** — auto-installed to your FL Studio Hardware folder
+
+            ### Requirements
+            - Windows 10/11 (64-bit)
+            - [loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html) — create a virtual MIDI port named **"FL Agent"**
+            - FL Studio (any modern version) — optional, needed for recording to piano roll
+            - An API key from [openrouter.ai](https://openrouter.ai) or Anthropic
+
+            ### Quick start
+            1. Run `FL_Agent_Setup.exe` and follow the wizard
+            2. Open loopMIDI and add a port called **FL Agent**
+            3. Launch **FL Agent** from the Start Menu or Desktop
+            4. Type a music request and enjoy!
+          draft: false
+          prerelease: false
+          files: release-assets/FL_Agent_Setup.exe
