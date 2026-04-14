@@ -122,25 +122,30 @@ jobs:
       - name: Pre-compile diagnostics
         shell: pwsh
         run: |
-          Write-Host "=== Working directory ==="
-          Get-Location
-          Write-Host "=== ISCC path from env ==="
-          Write-Host "ISCC_PATH='$env:ISCC_PATH'"
-          Write-Host "=== ISCC version ==="
+          $diag = @()
+          $diag += "=== CWD: $(Get-Location) ==="
+          $diag += "=== ISCC_PATH: '$env:ISCC_PATH' ==="
           if ($env:ISCC_PATH -and (Test-Path $env:ISCC_PATH)) {
-            & $env:ISCC_PATH /? 2>&1 | Select-Object -First 5 | Write-Host
+            $diag += "ISCC exists: YES"
+            $ver = & $env:ISCC_PATH /? 2>&1 | Select-Object -First 3
+            $diag += "ISCC version: $ver"
           } else {
-            Write-Host "ISCC_PATH not set or file not found!"
-            Get-ChildItem "C:\Program Files*\Inno Setup*" -ErrorAction SilentlyContinue | Write-Host
+            $diag += "ISCC NOT FOUND — searching..."
+            $found = Get-ChildItem "C:\Program Files*\Inno Setup*" -ErrorAction SilentlyContinue
+            $diag += "Inno Setup dirs: $found"
           }
-          Write-Host "=== dist\ contents ==="
+          $diag += "=== dist\ ==="
           if (Test-Path "dist") {
-            Get-ChildItem "dist" -Recurse -Depth 2 | Select-Object FullName | Write-Host
+            Get-ChildItem "dist" -Recurse -Depth 2 | ForEach-Object { $diag += $_.FullName }
           } else {
-            Write-Host "dist\ directory does not exist!"
+            $diag += "dist\ MISSING"
           }
-          Write-Host "=== installer.iss contents ==="
-          Get-Content installer.iss | Write-Host
+          $diag += "=== installer.iss ==="
+          Get-Content installer.iss | ForEach-Object { $diag += $_ }
+
+          # Write to console AND to a file uploaded as artifact
+          $diag | ForEach-Object { Write-Host $_ }
+          $diag | Out-File "diag.txt" -Encoding utf8
 
       # ── Compile installer ─────────────────────────────────────────────────
       - name: Compile installer with Inno Setup
@@ -178,7 +183,18 @@ jobs:
           path: Output/FL_Agent_Setup.exe
           retention-days: 30
 
-      # ── Upload logs on failure ────────────────────────────────────────────
+      # ── Always upload diagnostics ─────────────────────────────────────────
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: diagnostics-${{ github.sha }}
+          path: |
+            diag.txt
+            iscc-compile.log
+          retention-days: 7
+
+      # ── Upload build logs on failure ──────────────────────────────────────
       - name: Upload build logs on failure
         if: failure()
         uses: actions/upload-artifact@v4.6.2
@@ -187,7 +203,6 @@ jobs:
           path: |
             build/
             *.warn
-            iscc-compile.log
           retention-days: 7
 
   # ─── Release job (tag pushes only) ──────────────────────────────────────
