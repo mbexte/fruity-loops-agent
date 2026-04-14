@@ -8,8 +8,9 @@ Architecture:
   run_scheduler()     Dispatches events with sub-ms accuracy (no timing sleeps)
   play_song()         High-level entry: build + schedule + FL Studio recording wrap
   preview_song()      Same as play_song() but no recording control messages
-  list_channels()     Return all 16 MIDI channels with their names and active status
-  set_active_channel() Select the active MIDI channel for recording (notifies FL Studio)
+  list_channels()      Return the local channel registry (16 named slots, instant)
+  set_active_channel() Select the active channel rack channel (sends CMD_SET_CHANNEL)
+  query_fl_channels()  Send CMD_LIST_CHANNELS and collect live channel names from FL Studio
 
 Timing strategy:
   - All event times are absolute offsets from t0 = time.perf_counter() at start.
@@ -26,10 +27,15 @@ SysEx control protocol:
   mido handles the 0xF0 / 0xF7 framing automatically; only the inner bytes
   are supplied to mido.Message("sysex", data=[...]).
 
-  Commands:
+  Inbound commands (Python → FL Studio):
       CMD_START_RECORDING (0x01) — arm FL Studio recording, start transport
       CMD_STOP_RECORDING  (0x02) — stop FL Studio transport
-      CMD_SET_CHANNEL     (0x03) — set active recording channel; DATA = [channel 0-15]
+      CMD_SET_CHANNEL     (0x03) — set active channel rack channel; DATA = [index]
+      CMD_LIST_CHANNELS   (0x04) — request channel rack list from FL Studio
+
+  Outbound responses (FL Studio → Python, received via MIDI input port):
+      RSP_CHANNEL_ENTRY   (0x10) — one per channel: DATA = [index, name bytes…]
+      RSP_CHANNEL_DONE    (0x11) — end of list:     DATA = [selected_index]
 """
 
 import time
@@ -52,10 +58,15 @@ SPIN_MARGIN  = 0.001   # spin only for the final 1 ms before dispatch
 SYSEX_MANUFACTURER  = 0x7D   # Non-commercial / educational manufacturer ID
 SYSEX_DEVICE_ID     = 0x01   # FL Agent device identifier
 
-# Command bytes — every message: 0xF0 MANUFACTURER DEVICE_ID CMD [DATA…] 0xF7
+# Inbound command bytes (Python → FL Studio)
 CMD_START_RECORDING = 0x01   # Arm FL Studio recording and start transport
 CMD_STOP_RECORDING  = 0x02   # Stop FL Studio transport
-CMD_SET_CHANNEL     = 0x03   # Select active MIDI recording channel; DATA = [channel 0-15]
+CMD_SET_CHANNEL     = 0x03   # Activate a channel rack channel; DATA = [index]
+CMD_LIST_CHANNELS   = 0x04   # Request channel rack list; FL Studio replies with RSP_* frames
+
+# Outbound response codes (FL Studio → Python)
+RSP_CHANNEL_ENTRY   = 0x10   # One frame per channel: DATA = [index, name as 7-bit ASCII]
+RSP_CHANNEL_DONE    = 0x11   # End-of-list marker:    DATA = [selected_index]
 
 # ── channel registry ──────────────────────────────────────────────────────────
 
@@ -154,13 +165,14 @@ def list_channels() -> list[dict]:
 
 
 def set_active_channel(channel: int) -> None:
-    """Set the active MIDI channel for recording and notify FL Studio via SysEx.
+    """Set the active channel rack channel and notify FL Studio via SysEx.
 
-    Sends CMD_SET_CHANNEL so the FL Studio script can arm the correct
-    instrument/channel before the next recording session starts.
+    Sends CMD_SET_CHANNEL so the FL Studio script calls
+    channels.setActiveChannel(index) on the matching channel rack slot.
 
     Args:
-        channel: MIDI channel number 0-15.
+        channel: Channel rack index (validated by FL Studio against the live
+                 channel count; the local registry is used only for display).
 
     Raises:
         ValueError: if channel is outside 0-15.
@@ -169,10 +181,78 @@ def set_active_channel(channel: int) -> None:
     if not 0 <= channel <= 15:
         raise ValueError(f"Channel must be 0–15, got {channel}")
     _active_recording_channel = channel
-    name = CHANNEL_REGISTRY[channel]
+    name = CHANNEL_REGISTRY.get(channel, f"Channel {channel}")
     with mido.open_output(_get_port()) as port:
         _send_command(port, CMD_SET_CHANNEL, [channel])
     print(f"Active recording channel → {channel} ({name})")
+
+
+def query_fl_channels(timeout: float = 3.0) -> list[dict] | None:
+    """Request the live FL Studio channel rack list via SysEx and collect responses.
+
+    Sends CMD_LIST_CHANNELS to FL Studio, then opens the MIDI input port and
+    waits up to *timeout* seconds for RSP_CHANNEL_ENTRY frames followed by a
+    RSP_CHANNEL_DONE frame.  Returns a list of dicts on success, or None if
+    FL Studio did not respond within the timeout.
+
+    Return format (mirrors list_channels())::
+
+        [
+            {"channel": 0, "name": "Synth Lead", "active": False},
+            {"channel": 1, "name": "Kick",       "active": True},
+            ...
+        ]
+
+    Requirements:
+        - loopMIDI "FL Agent" port must be open for both reading and writing.
+        - FL Studio must have the FL Agent Controller script loaded and active.
+        - FL Studio's MIDI output for the port must be enabled in MIDI settings.
+    """
+    port_name = _get_port()
+    result: list[dict] = []
+
+    try:
+        with mido.open_output(port_name) as out_port, \
+             mido.open_input(port_name) as in_port:
+
+            _send_command(out_port, CMD_LIST_CHANNELS)
+
+            deadline = time.perf_counter() + timeout
+            while time.perf_counter() < deadline:
+                msg = in_port.poll()
+                if msg is None:
+                    time.sleep(0.005)
+                    continue
+                if msg.type != "sysex":
+                    continue
+
+                # mido strips F0/F7; data = [MFR, DEV, RSP, ...]
+                data = list(msg.data)
+                if len(data) < 3:
+                    continue
+                if data[0] != SYSEX_MANUFACTURER or data[1] != SYSEX_DEVICE_ID:
+                    continue
+
+                rsp     = data[2]
+                payload = data[3:]
+
+                if rsp == RSP_CHANNEL_ENTRY and payload:
+                    index = payload[0]
+                    name  = bytes(payload[1:]).decode("ascii", errors="replace")
+                    result.append({"channel": index, "name": name, "active": False})
+
+                elif rsp == RSP_CHANNEL_DONE:
+                    selected = payload[0] if payload else -1
+                    for ch in result:
+                        ch["active"] = (ch["channel"] == selected)
+                    return result
+
+    except Exception as exc:
+        print(f"query_fl_channels error: {exc}")
+        return None
+
+    print("query_fl_channels: timed out waiting for RSP_CHANNEL_DONE")
+    return None
 
 
 # ── event builders ────────────────────────────────────────────────────────────

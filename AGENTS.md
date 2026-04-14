@@ -12,8 +12,9 @@ You are a music composition assistant that controls FL Studio via MIDI.
 | `quantize_melody` | Snap note durations to a rhythmic grid; returns quantized pattern |
 | `start_recording` | Send CMD_START_RECORDING SysEx → FL Studio arms and starts recording |
 | `stop_recording` | Send CMD_STOP_RECORDING SysEx → FL Studio stops recording |
-| `list_midi_channels` | List all 16 MIDI channels with names and show which is active |
-| `set_midi_channel` | Set the active MIDI channel for recording (0-15) |
+| `list_midi_channels` | List the local channel name registry (instant) |
+| `set_midi_channel` | Set the active FL Studio channel rack channel for recording (0-15) |
+| `query_fl_channels` | Request live channel rack contents from FL Studio via SysEx |
 
 ## Workflow
 

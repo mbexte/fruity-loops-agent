@@ -36,6 +36,7 @@ from midi_scheduler import (
     _send_command,
     list_channels,
     set_active_channel,
+    query_fl_channels,
     play_song,
     preview_song,
 )
@@ -46,6 +47,7 @@ __all__ = [
     "stop_recording",
     "list_channels",
     "set_active_channel",
+    "query_fl_channels",
     "play_melody",
     "play_song",
     "preview_song",
