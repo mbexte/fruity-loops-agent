@@ -7,7 +7,6 @@
 ;   ISCC /DAppVersion=1.2.3 installer.iss
 ; ============================================================================
 
-; Default version if not provided via command-line define
 #ifndef AppVersion
   #define AppVersion "1.0.0"
 #endif
@@ -21,7 +20,6 @@
 
 ; ============================================================================
 [Setup]
-; ─── Identity ────────────────────────────────────────────────────────────────
 AppId={#AppId}
 AppName={#AppName}
 AppVersion={#AppVersion}
@@ -30,33 +28,17 @@ AppPublisher={#AppPublisher}
 AppPublisherURL={#AppURL}
 AppSupportURL={#AppURL}/issues
 AppUpdatesURL={#AppURL}/releases
-
-; ─── Install paths ───────────────────────────────────────────────────────────
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 AllowNoIcons=yes
-
-; ─── Output ──────────────────────────────────────────────────────────────────
 OutputDir=Output
 OutputBaseFilename=FL_Agent_Setup
-SetupIconFile=
-
-; ─── Compression ─────────────────────────────────────────────────────────────
 Compression=lzma2/ultra64
 SolidCompression=yes
-
-; ─── Appearance ──────────────────────────────────────────────────────────────
 WizardStyle=modern
-
-; ─── Permissions ─────────────────────────────────────────────────────────────
-; "lowest" = install per-user by default; dialog allows elevation if needed
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
-
-; ─── Platform ────────────────────────────────────────────────────────────────
-ArchitecturesInstallIn64BitMode=x64compatible
-
-; ─── Uninstaller ─────────────────────────────────────────────────────────────
+ArchitecturesInstallIn64BitMode=x64
 UninstallDisplayIcon={app}\{#AppExeName}
 UninstallDisplayName={#AppName} {#AppVersion}
 
@@ -65,53 +47,28 @@ UninstallDisplayName={#AppName} {#AppVersion}
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 ; ============================================================================
+; NOTE: Each [Tasks] entry must be on a single line — no backslash continuation
+; ============================================================================
 [Tasks]
-; Desktop shortcut
-Name: "desktopicon"; \
-  Description: "Create a &desktop shortcut"; \
-  GroupDescription: "Shortcuts:"; \
-  Flags: unchecked
-
-; FL Studio controller script
-Name: "flstudio"; \
-  Description: "Install FL Studio MIDI controller script"; \
-  GroupDescription: "FL Studio Integration:";
-
-; Claude Code MCP registration
-Name: "configureclaude"; \
-  Description: "Register MCP server with Claude Code (if installed)"; \
-  GroupDescription: "Agent Configuration:"; \
-  Flags: unchecked
-
-; VS Code / GitHub Copilot MCP config
-Name: "configurevscode"; \
-  Description: "Write VS Code MCP config for GitHub Copilot"; \
-  GroupDescription: "Agent Configuration:"; \
-  Flags: unchecked
+Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Shortcuts:"; Flags: unchecked
+Name: "flstudio"; Description: "Install FL Studio MIDI controller script"; GroupDescription: "FL Studio Integration:"
+Name: "configureclaude"; Description: "Register MCP server with Claude Code (if installed)"; GroupDescription: "Agent Configuration:"; Flags: unchecked
+Name: "configurevscode"; Description: "Write VS Code MCP config for GitHub Copilot"; GroupDescription: "Agent Configuration:"; Flags: unchecked
 
 ; ============================================================================
 [Files]
-; Main application (PyInstaller onedir output)
-Source: "dist\FL Agent\*"; \
-  DestDir: "{app}"; \
-  Flags: ignoreversion recursesubdirs createallsubdirs
-
-; FL Studio controller script staged to {tmp} for the Pascal code section
-Source: "fl_studio_script\device_FL_Agent_Controller.py"; \
-  DestDir: "{tmp}"; \
-  Flags: dontcopy
+Source: "dist\FL Agent\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "fl_studio_script\device_FL_Agent_Controller.py"; DestDir: "{tmp}"; Flags: dontcopy
 
 ; ============================================================================
 [Icons]
-Name: "{group}\{#AppName}";              Filename: "{app}\{#AppExeName}"
-Name: "{group}\Uninstall {#AppName}";    Filename: "{uninstallexe}"
-Name: "{commondesktop}\{#AppName}";      Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
+Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"
+Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
+Name: "{commondesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
 
 ; ============================================================================
 [Run]
-Filename: "{app}\{#AppExeName}"; \
-  Description: "Launch {#AppName} now"; \
-  Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#AppExeName}"; Description: "Launch {#AppName} now"; Flags: nowait postinstall skipifsilent
 
 ; ============================================================================
 [Code]
@@ -134,27 +91,23 @@ begin
 end;
 
 // ---------------------------------------------------------------------------
-// Write a UTF-8 string to a file (Inno Setup 6 helper)
+// Write content to a file (overwrites if exists)
 // ---------------------------------------------------------------------------
-procedure WriteFile(const FileName, Content: string);
-var
-  Lines: TArrayOfString;
+procedure WriteTextFile(FileName: string; Content: string);
 begin
-  SetArrayLength(Lines, 1);
-  Lines[0] := Content;
-  SaveStringsToFile(FileName, Lines, False);
+  SaveStringToFile(FileName, Content, False);
 end;
 
 // ---------------------------------------------------------------------------
 // Escape backslashes for embedding a Windows path in JSON
 // ---------------------------------------------------------------------------
-function JsonPath(const S: string): string;
+function JsonPath(S: string): string;
 begin
   Result := StringReplace(S, '\', '\\', [rfReplaceAll]);
 end;
 
 // ---------------------------------------------------------------------------
-// Wizard initialisation — add API-key input page
+// Wizard initialisation — add optional API-key input page
 // ---------------------------------------------------------------------------
 procedure InitializeWizard;
 begin
@@ -162,12 +115,12 @@ begin
     wpSelectTasks,
     'API Keys (Optional)',
     'Configure your AI assistant',
-    'Enter an API key so FL Agent can talk to an AI model right away.'      + #13#10 +
-    'You can skip this and set the environment variable manually later.'    + #13#10#13#10 +
-    'Tip: get a free key at openrouter.ai — supports Claude, GPT-4, and more.');
+    'Enter an API key so FL Agent can talk to an AI model right away.' + #13#10 +
+    'You can skip this and set the environment variable manually later.' + #13#10#13#10 +
+    'Get a free key at openrouter.ai — supports Claude, GPT-4, and more.');
 
   ApiPage.Add('OpenRouter API Key  (OPENROUTER_API_KEY):', True);
-  ApiPage.Add('Anthropic API Key   (ANTHROPIC_API_KEY): ', True);
+  ApiPage.Add('Anthropic API Key   (ANTHROPIC_API_KEY):', True);
 end;
 
 // ---------------------------------------------------------------------------
@@ -175,11 +128,15 @@ end;
 // ---------------------------------------------------------------------------
 procedure CurStepChanged(CurStep: TSetupStep);
 var
-  HardwareDir, ControllerDst : string;
-  AppPath, McpExePath         : string;
-  ClaudeDir, ClaudeSettings   : string;
-  VsCodeDir, VsCodeMcp        : string;
-  JsonContent                 : string;
+  HardwareDir: string;
+  ControllerDst: string;
+  AppPath: string;
+  McpExePath: string;
+  ClaudeDir: string;
+  ClaudeSettings: string;
+  VsCodeDir: string;
+  VsCodeMcp: string;
+  JsonContent: string;
 begin
   if CurStep <> ssPostInstall then Exit;
 
@@ -194,30 +151,26 @@ begin
     begin
       ExtractTemporaryFile('device_FL_Agent_Controller.py');
       ControllerDst := HardwareDir + '\device_FL_Agent_Controller.py';
-      FileCopy(ExpandConstant('{tmp}\device_FL_Agent_Controller.py'),
-               ControllerDst, False);
+      FileCopy(ExpandConstant('{tmp}\device_FL_Agent_Controller.py'), ControllerDst, False);
     end
     else
     begin
       MsgBox(
-        'FL Studio Hardware folder not found:'                              + #13#10 +
+        'FL Studio Hardware folder not found:' + #13#10 +
         ExpandConstant('{userdocs}\Image-Line\FL Studio\Settings\Hardware') + #13#10#13#10 +
-        'After installing FL Studio, copy this file there manually:'        + #13#10 +
-        AppPath + '\fl_studio_script\device_FL_Agent_Controller.py'         + #13#10#13#10 +
-        'Then restart FL Studio, go to Options > MIDI Settings > Input,'    + #13#10 +
-        'enable the "FL Agent" port, and set its controller to'             + #13#10 +
-        '"FL Agent Controller".',
+        'After installing FL Studio, copy this file there manually:' + #13#10 +
+        AppPath + '\fl_studio_script\device_FL_Agent_Controller.py' + #13#10#13#10 +
+        'Then restart FL Studio, open Options > MIDI Settings > Input,' + #13#10 +
+        'enable the "FL Agent" port and set its controller to "FL Agent Controller".',
         mbInformation, MB_OK);
     end;
   end;
 
   // ── 2. Persist API keys in the user-level environment ─────────────────────
   if ApiPage.Values[0] <> '' then
-    RegWriteStringValue(HKEY_CURRENT_USER, 'Environment',
-                        'OPENROUTER_API_KEY', ApiPage.Values[0]);
+    RegWriteStringValue(HKEY_CURRENT_USER, 'Environment', 'OPENROUTER_API_KEY', ApiPage.Values[0]);
   if ApiPage.Values[1] <> '' then
-    RegWriteStringValue(HKEY_CURRENT_USER, 'Environment',
-                        'ANTHROPIC_API_KEY', ApiPage.Values[1]);
+    RegWriteStringValue(HKEY_CURRENT_USER, 'Environment', 'ANTHROPIC_API_KEY', ApiPage.Values[1]);
 
   // ── 3. Register MCP server with Claude Code ────────────────────────────────
   if IsTaskSelected('configureclaude') then
@@ -228,19 +181,19 @@ begin
     if not DirExists(ClaudeDir) then
       CreateDir(ClaudeDir);
 
-    // Write only when the file is absent to avoid stomping on user config.
+    // Only write if file is absent to avoid overwriting existing user config
     if not FileExists(ClaudeSettings) then
     begin
       JsonContent :=
-        '{'                                                                  + #13#10 +
-        '  "mcpServers": {'                                                  + #13#10 +
-        '    "fl-agent": {'                                                  + #13#10 +
-        '      "command": "' + JsonPath(McpExePath) + '",'                  + #13#10 +
-        '      "args": []'                                                   + #13#10 +
-        '    }'                                                              + #13#10 +
-        '  }'                                                                + #13#10 +
+        '{' + #13#10 +
+        '  "mcpServers": {' + #13#10 +
+        '    "fl-agent": {' + #13#10 +
+        '      "command": "' + JsonPath(McpExePath) + '",' + #13#10 +
+        '      "args": []' + #13#10 +
+        '    }' + #13#10 +
+        '  }' + #13#10 +
         '}';
-      WriteFile(ClaudeSettings, JsonContent);
+      WriteTextFile(ClaudeSettings, JsonContent);
     end;
   end;
 
@@ -254,20 +207,19 @@ begin
       CreateDir(VsCodeDir);
 
     JsonContent :=
-      '{'                                                                    + #13#10 +
-      '  "servers": {'                                                       + #13#10 +
-      '    "fl-agent": {'                                                    + #13#10 +
-      '      "type": "stdio",'                                               + #13#10 +
-      '      "command": "' + JsonPath(McpExePath) + '",'                    + #13#10 +
-      '      "args": []'                                                     + #13#10 +
-      '    }'                                                                + #13#10 +
-      '  }'                                                                  + #13#10 +
+      '{' + #13#10 +
+      '  "servers": {' + #13#10 +
+      '    "fl-agent": {' + #13#10 +
+      '      "type": "stdio",' + #13#10 +
+      '      "command": "' + JsonPath(McpExePath) + '",' + #13#10 +
+      '      "args": []' + #13#10 +
+      '    }' + #13#10 +
+      '  }' + #13#10 +
       '}';
-    WriteFile(VsCodeMcp, JsonContent);
+    WriteTextFile(VsCodeMcp, JsonContent);
   end;
 end;
 
-// Required stub — keep default behaviour
 function NextButtonClick(CurPageID: Integer): Boolean;
 begin
   Result := True;
