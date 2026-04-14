@@ -152,19 +152,22 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ steps.version.outputs.value }}"
-          Write-Host "Compiling version $version ..."
+          Write-Host "ISCC : $env:ISCC_PATH"
+          Write-Host "Version: $version"
 
-          # Run ISCC; capture output so it appears in the log
-          $logFile = "iscc-compile.log"
-          & $env:ISCC_PATH /DAppVersion=$version /LOG=$logFile installer.iss
+          # Capture ISCC stdout+stderr so we can echo it and write to summary
+          $isccOut = & $env:ISCC_PATH /DAppVersion=$version installer.iss 2>&1 | Out-String
           $rc = $LASTEXITCODE
 
-          if (Test-Path $logFile) {
-            Write-Host "=== ISCC compile log ==="
-            Get-Content $logFile | Write-Host
-          }
+          Write-Host "=== ISCC output ==="
+          Write-Host $isccOut
 
           if ($rc -ne 0) {
+            # Also write to step summary — visible on the run page without auth
+            "## Inno Setup Failed (exit $rc)" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+            '```' | Out-File -Append $env:GITHUB_STEP_SUMMARY
+            $isccOut | Out-File -Append $env:GITHUB_STEP_SUMMARY
+            '```' | Out-File -Append $env:GITHUB_STEP_SUMMARY
             throw "Inno Setup compilation failed (exit code $rc)"
           }
 
@@ -189,9 +192,7 @@ jobs:
         uses: actions/upload-artifact@v4.6.2
         with:
           name: diagnostics-${{ github.sha }}
-          path: |
-            diag.txt
-            iscc-compile.log
+          path: diag.txt
           retention-days: 7
 
       # ── Upload build logs on failure ──────────────────────────────────────
