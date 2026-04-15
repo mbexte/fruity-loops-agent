@@ -542,7 +542,7 @@ class FLAgentGUI:
                                     args = json.loads(tc["function"]["arguments"])
                                     self._ui_q.put({
                                         "type": "chat",
-                                        "text": f"  → {fn}({json.dumps(args)[:160]})",
+                                        "text": f"  -> {fn}({json.dumps(args)[:160]})",
                                         "tag": "tool",
                                     })
 

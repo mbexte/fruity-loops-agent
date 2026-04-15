@@ -217,6 +217,141 @@ async def list_tools() -> list[types.Tool]:
                 "required": ["tempo", "layers"],
             },
         ),
+        # ── Transport control ─────────────────────────────────────────────────
+        types.Tool(
+            name="ping",
+            description="Send a PING to the FL Agent Controller script and verify it is alive.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        types.Tool(
+            name="request_status",
+            description=(
+                "Request a full status snapshot from FL Studio: "
+                "is_playing, is_recording, loop_on, metronome_on, current pattern slot, tempo."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        types.Tool(
+            name="set_tempo",
+            description=(
+                "Set the FL Studio tempo precisely via SysEx (14-bit, 40–999 BPM). "
+                "Prefer this over the CC-based tempo when accuracy matters."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "bpm": {
+                        "type": "integer",
+                        "description": "Tempo in BPM (40–999).",
+                    },
+                },
+                "required": ["bpm"],
+            },
+        ),
+        types.Tool(
+            name="rewind",
+            description="Return the FL Studio playhead to bar 1 (position 0).",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        types.Tool(
+            name="pause_resume",
+            description="Pause the FL Studio transport if playing, or resume if paused.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        types.Tool(
+            name="toggle_loop",
+            description="Toggle FL Studio loop mode on or off.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        types.Tool(
+            name="toggle_metronome",
+            description="Toggle the FL Studio metronome on or off.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        # ── Pattern management ────────────────────────────────────────────────
+        types.Tool(
+            name="select_pattern",
+            description="Switch FL Studio to a specific pattern slot (0-based index).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "slot": {
+                        "type": "integer",
+                        "description": "Pattern slot index (0–127).",
+                    },
+                },
+                "required": ["slot"],
+            },
+        ),
+        types.Tool(
+            name="set_pattern_name",
+            description="Assign a name to a pattern slot in FL Studio (max 32 ASCII characters).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "slot": {
+                        "type": "integer",
+                        "description": "Pattern slot index (0–127).",
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Pattern name (ASCII only, max 32 chars).",
+                    },
+                },
+                "required": ["slot", "name"],
+            },
+        ),
+        types.Tool(
+            name="pattern_clear",
+            description="Erase all notes from a pattern slot in FL Studio.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "slot": {
+                        "type": "integer",
+                        "description": "Pattern slot index (0–127).",
+                    },
+                },
+                "required": ["slot"],
+            },
+        ),
+        # ── Mixer control ─────────────────────────────────────────────────────
+        types.Tool(
+            name="channel_mute",
+            description="Mute or unmute a mixer channel in FL Studio.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "channel": {
+                        "type": "integer",
+                        "description": "Mixer channel index (0-based).",
+                    },
+                    "mute": {
+                        "type": "boolean",
+                        "description": "True to mute, False to unmute.",
+                    },
+                },
+                "required": ["channel", "mute"],
+            },
+        ),
+        types.Tool(
+            name="channel_solo",
+            description="Solo or unsolo a mixer channel in FL Studio.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "channel": {
+                        "type": "integer",
+                        "description": "Mixer channel index (0-based).",
+                    },
+                    "solo": {
+                        "type": "boolean",
+                        "description": "True to solo, False to unsolo.",
+                    },
+                },
+                "required": ["channel", "solo"],
+            },
+        ),
     ]
 
 
@@ -320,6 +455,120 @@ async def call_tool(
             type="text",
             text=json.dumps({"grid_bars": grid_bars, "melody_pattern": quantized}, indent=2),
         )]
+
+    # ── Transport control ─────────────────────────────────────────────────────
+
+    elif name == "ping":
+        try:
+            await asyncio.get_event_loop().run_in_executor(None, fl_transport.ping)
+            return [types.TextContent(type="text", text="PING sent — FL Agent Controller is alive.")]
+        except Exception as exc:
+            return [types.TextContent(type="text", text=f"ERROR: {exc}")]
+
+    elif name == "request_status":
+        try:
+            await asyncio.get_event_loop().run_in_executor(None, fl_transport.request_status)
+            return [types.TextContent(type="text", text="STATUS requested from FL Studio.")]
+        except Exception as exc:
+            return [types.TextContent(type="text", text=f"ERROR: {exc}")]
+
+    elif name == "set_tempo":
+        bpm = int(arguments.get("bpm", 120))
+        try:
+            await asyncio.get_event_loop().run_in_executor(None, fl_transport.set_tempo, bpm)
+            return [types.TextContent(type="text", text=f"Tempo set to {bpm} BPM.")]
+        except Exception as exc:
+            return [types.TextContent(type="text", text=f"ERROR: {exc}")]
+
+    elif name == "rewind":
+        try:
+            with fl_transport.FLTransport() as t:
+                await asyncio.get_event_loop().run_in_executor(None, t.rewind)
+            return [types.TextContent(type="text", text="Rewound to bar 1.")]
+        except Exception as exc:
+            return [types.TextContent(type="text", text=f"ERROR: {exc}")]
+
+    elif name == "pause_resume":
+        try:
+            with fl_transport.FLTransport() as t:
+                await asyncio.get_event_loop().run_in_executor(None, t.pause_resume)
+            return [types.TextContent(type="text", text="Transport paused/resumed.")]
+        except Exception as exc:
+            return [types.TextContent(type="text", text=f"ERROR: {exc}")]
+
+    elif name == "toggle_loop":
+        try:
+            with fl_transport.FLTransport() as t:
+                await asyncio.get_event_loop().run_in_executor(None, t.toggle_loop)
+            return [types.TextContent(type="text", text="Loop mode toggled.")]
+        except Exception as exc:
+            return [types.TextContent(type="text", text=f"ERROR: {exc}")]
+
+    elif name == "toggle_metronome":
+        try:
+            with fl_transport.FLTransport() as t:
+                await asyncio.get_event_loop().run_in_executor(None, t.toggle_metronome)
+            return [types.TextContent(type="text", text="Metronome toggled.")]
+        except Exception as exc:
+            return [types.TextContent(type="text", text=f"ERROR: {exc}")]
+
+    # ── Pattern management ────────────────────────────────────────────────────
+
+    elif name == "select_pattern":
+        slot = int(arguments.get("slot", 0))
+        try:
+            await asyncio.get_event_loop().run_in_executor(
+                None, fl_transport.select_pattern, slot
+            )
+            return [types.TextContent(type="text", text=f"Pattern slot {slot} selected.")]
+        except Exception as exc:
+            return [types.TextContent(type="text", text=f"ERROR: {exc}")]
+
+    elif name == "set_pattern_name":
+        slot = int(arguments.get("slot", 0))
+        pattern_name = str(arguments.get("name", ""))
+        try:
+            await asyncio.get_event_loop().run_in_executor(
+                None, fl_transport.set_pattern_name, slot, pattern_name
+            )
+            return [types.TextContent(type="text", text=f"Pattern {slot} named '{pattern_name}'.")]
+        except Exception as exc:
+            return [types.TextContent(type="text", text=f"ERROR: {exc}")]
+
+    elif name == "pattern_clear":
+        slot = int(arguments.get("slot", 0))
+        try:
+            with fl_transport.FLTransport() as t:
+                await asyncio.get_event_loop().run_in_executor(None, t.pattern_clear, slot)
+            return [types.TextContent(type="text", text=f"Pattern {slot} cleared.")]
+        except Exception as exc:
+            return [types.TextContent(type="text", text=f"ERROR: {exc}")]
+
+    # ── Mixer control ─────────────────────────────────────────────────────────
+
+    elif name == "channel_mute":
+        channel = int(arguments.get("channel", 0))
+        mute = bool(arguments.get("mute", True))
+        try:
+            await asyncio.get_event_loop().run_in_executor(
+                None, fl_transport.channel_mute, channel, mute
+            )
+            state = "muted" if mute else "unmuted"
+            return [types.TextContent(type="text", text=f"Channel {channel} {state}.")]
+        except Exception as exc:
+            return [types.TextContent(type="text", text=f"ERROR: {exc}")]
+
+    elif name == "channel_solo":
+        channel = int(arguments.get("channel", 0))
+        solo = bool(arguments.get("solo", True))
+        try:
+            await asyncio.get_event_loop().run_in_executor(
+                None, fl_transport.channel_solo, channel, solo
+            )
+            state = "soloed" if solo else "unsoloed"
+            return [types.TextContent(type="text", text=f"Channel {channel} {state}.")]
+        except Exception as exc:
+            return [types.TextContent(type="text", text=f"ERROR: {exc}")]
 
     return [types.TextContent(type="text", text=f"Unknown tool: {name}")]
 

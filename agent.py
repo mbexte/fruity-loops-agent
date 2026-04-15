@@ -241,7 +241,7 @@ async def run(model: str) -> None:
                             break
                         """
                                 args = json.loads(tc["function"]["arguments"])
-                            print(f"  → {tc.function.name}({json.dumps(args)})")
+                            print(f"  -> {tc.function.name}({json.dumps(args)})")
 
                             result    = await session.call_tool(tc.function.name, args)
                             tool_text = "\n".join(
