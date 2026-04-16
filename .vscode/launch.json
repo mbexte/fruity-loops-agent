@@ -2,6 +2,25 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "FL Agent GUI",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/gui.py",
+            "console": "integratedTerminal",
+            "env": {
+                "OPENROUTER_API_KEY": "${env:OPENROUTER_API_KEY}"
+            }
+        },
+        {
+            "name": "FL Transport",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/fl_transport.py",
+            "console": "integratedTerminal",
+            "args": ["${input:flCmd}"],
+            "preLaunchTask": "install-fl-script"
+        },
+        {
             "name": "Music API Server",
             "type": "python",
             "request": "launch",
@@ -19,6 +38,32 @@
             "env": {
                 "OPENROUTER_API_KEY": "${env:OPENROUTER_API_KEY}"
             }
+        }
+    ],
+    "inputs": [
+        {
+            "id": "flCmd",
+            "type": "pickString",
+            "description": "FL Transport command",
+            "options": [
+                "ping",
+                "status",
+                "start",
+                "stop",
+                "rewind",
+                "loop",
+                "metronome",
+                "tempo 140",
+                "pattern 0",
+                "name 0 Lead",
+                "mute 0",
+                "unmute 0",
+                "solo 0",
+                "unsolo 0",
+                "quantize 2",
+                "clear 0"
+            ],
+            "default": "ping"
         }
     ]
 }

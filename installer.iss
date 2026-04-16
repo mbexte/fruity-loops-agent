@@ -34,7 +34,7 @@ OutputBaseFilename=FL_Agent_Setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
-PrivilegesRequired=lowest
+PrivilegesRequired=admin
 UninstallDisplayIcon={app}\{#AppExeName}
 UninstallDisplayName={#AppName} {#AppVersion}
 
@@ -70,11 +70,51 @@ Filename: "{app}\{#AppExeName}"; Description: "Launch {#AppName} now"; Flags: no
 var
   ApiPage: TInputQueryWizardPage;
 
+// Search Program Files for "FL Studio <year>\System\Hardware specific\FL Agent Controller".
+// Returns the folder path if found, or '' if not installed there.
+function FindFLAgentControllerDir(): string;
+var
+  Base: string;
+  Versions: TArrayOfString;
+  i: Integer;
+  Candidate: string;
+begin
+  Result := '';
+  Base := ExpandConstant('{pf}') + '\Image-Line\';
+  SetArrayLength(Versions, 7);
+  Versions[0] := 'FL Studio 2026';
+  Versions[1] := 'FL Studio 2025';
+  Versions[2] := 'FL Studio 2024';
+  Versions[3] := 'FL Studio 21';
+  Versions[4] := 'FL Studio 20';
+  Versions[5] := 'FL Studio 12';
+  Versions[6] := 'FL Studio';
+  for i := 0 to GetArrayLength(Versions) - 1 do
+  begin
+    Candidate := Base + Versions[i] + '\System\Hardware specific\FL Agent Controller';
+    if DirExists(Candidate) then
+    begin
+      Result := Candidate;
+      Exit;
+    end;
+  end;
+end;
+
+// Returns the best available destination directory for the MIDI script:
+//   1. Program Files  …\Hardware specific\FL Agent Controller   (preferred)
+//   2. User documents …\Image-Line\FL Studio\Settings\Hardware  (fallback)
+//   3. ''  (not found)
 function FindFLStudioHardwareDir(): string;
 var
   Candidate: string;
 begin
-  Candidate := ExpandConstant('{userdocs}\Image-Line\FL Studio\Settings\Hardware');
+  Candidate := FindFLAgentControllerDir();
+  if Candidate <> '' then
+  begin
+    Result := Candidate;
+    Exit;
+  end;
+  Candidate := ExpandConstant('{userdocs}') + '\Image-Line\FL Studio\Settings\Hardware';
   if DirExists(Candidate) then
     Result := Candidate
   else
@@ -129,8 +169,12 @@ begin
   begin
     HardwareDir := FindFLStudioHardwareDir();
     if HardwareDir <> '' then
+    begin
+      if not DirExists(HardwareDir) then
+        ForceDirectories(HardwareDir);
       FileCopy(AppPath + '\fl_studio_script\device_FL_Agent_Controller.py',
-               HardwareDir + '\device_FL_Agent_Controller.py', False)
+               HardwareDir + '\device_FL Agent Controller.py', False);
+    end
     else
       MsgBox(
         'FL Studio Hardware folder not found.' + #13#10#13#10 +

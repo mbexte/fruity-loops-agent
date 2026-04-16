@@ -7,4 +7,6 @@ mcp
 openai
 sounddevice
 numpy
+pytest
 # sounddevice + numpy are required for voice recording in gui.py
+# pytest is required for the FL MIDI Protocol test suite (tests/)
