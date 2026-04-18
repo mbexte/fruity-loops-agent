@@ -181,6 +181,7 @@ class FLAgentGUI:
         self._rec_frames: list = []
         self._rec_stream = None
         self._rec_rate   = 44100
+        self._melody_recorder = None   # Recorder instance for voice-to-MIDI path
 
         self._build_ui()
         self._start_agent_thread()
@@ -291,6 +292,14 @@ class FLAgentGUI:
                                    style="Record.TButton",
                                    command=self._toggle_record)
         self._rec_btn.pack(side=tk.LEFT)
+
+        # melody record button — separate mode for voice-to-MIDI (no Whisper)
+        self._melody_btn = ttk.Button(
+            input_f, text="🎵  Record Melody",
+            style="Record.TButton",
+            command=self._toggle_melody_record,
+        )
+        self._melody_btn.pack(side=tk.LEFT, padx=(4, 0))
 
         # ── status bar ────────────────────────────────────────────────────
         self.status_var = tk.StringVar(value="Connecting to MCP server…")
@@ -480,6 +489,79 @@ class FLAgentGUI:
                 _os.unlink(path)
             except Exception:
                 pass
+
+    # ── melody recording (voice → MIDI) ──────────────────────────────────────
+
+    def _toggle_melody_record(self) -> None:
+        if self._melody_recorder is not None:
+            self._stop_melody_record()
+        else:
+            self._start_melody_record()
+
+    def _start_melody_record(self) -> None:
+        try:
+            from main import handle_record_button
+        except ImportError as exc:
+            self._ui_q.put({
+                "type": "error",
+                "text": f"Voice-to-MIDI pipeline not available: {exc}",
+            })
+            return
+
+        self._melody_btn.configure(
+            text="⏹  Stop Melody",
+            style="Recording.TButton",
+        )
+        self._write("  🎵 Recording melody… hum or sing, then click Stop.", "system")
+
+        self._melody_recorder = handle_record_button(
+            on_status=lambda msg: self._ui_q.put({"type": "status", "text": msg}),
+            on_result=self._on_melody_result,
+            on_error=lambda err: self._ui_q.put({
+                "type": "error",
+                "text": f"Melody extraction failed: {err}",
+            }),
+        )
+
+    def _stop_melody_record(self) -> None:
+        if self._melody_recorder is not None:
+            self._melody_recorder.stop()
+            self._melody_recorder = None
+        self._melody_btn.configure(
+            text="🎵  Record Melody",
+            style="Record.TButton",
+        )
+        self._write("  Processing melody…", "system")
+
+    def _on_melody_result(self, result: dict) -> None:
+        """
+        Called from a background thread — must only touch _ui_q, never Tkinter directly.
+        Routes the extracted melody into the existing piano-roll preview flow.
+        """
+        pattern = result["pattern"]
+        tempo   = result["tempo"]
+        key     = result.get("key") or "?"
+
+        events_by_layer = {"melody": build_events(pattern, tempo)}
+        intent = {
+            "tempo":  tempo,
+            "layers": {"melody": pattern},
+        }
+
+        self._ui_q.put({"type": "preview", "intent": intent, "events": events_by_layer})
+        self._ui_q.put({
+            "type": "chat",
+            "text": (
+                f"  Melody captured — {len(pattern)} notes, "
+                f"~{tempo} BPM, key: {key}. "
+                f"MIDI saved to: {result['midi_path']}"
+            ),
+            "tag": "system",
+        })
+        self._ui_q.put({
+            "type": "status",
+            "text": f"Melody extracted  ({len(pattern)} notes, {tempo} BPM, {key})",
+        })
 
     # ── agent thread ──────────────────────────────────────────────────────────
 
