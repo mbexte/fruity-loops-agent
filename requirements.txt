@@ -10,3 +10,9 @@ numpy
 pytest
 # sounddevice + numpy are required for voice recording in gui.py
 # pytest is required for the FL MIDI Protocol test suite (tests/)
+
+# ── voice-to-MIDI pipeline (recorder.py / pitch.py / notes.py / midi.py / main.py) ──
+librosa>=0.10.0
+pretty_midi>=0.2.10
+scipy>=1.11.0
+crepe>=0.0.14       # optional — librosa.pyin fallback used if not installed
