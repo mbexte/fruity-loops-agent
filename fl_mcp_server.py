@@ -8,6 +8,7 @@ Tools:
   start_recording          — Send MIDI note 72 (start recording)
   stop_recording           — Send MIDI note 74 (stop recording)
   quantize_melody          — Snap note durations to a rhythmic grid
+  search_sheet_music       — Search IMSLP and Open Opus for sheet music of a given song
 
 Run standalone (used by Claude Code / agent.py via MCP):
   python fl_mcp_server.py
@@ -15,9 +16,13 @@ Run standalone (used by Claude Code / agent.py via MCP):
 
 import asyncio
 import glob
+import json
 import os
+import re
 import subprocess
 import sys
+import urllib.parse
+import urllib.request
 
 import mcp.types as types
 from mcp.server import Server
@@ -48,6 +53,101 @@ def _find_fl_studio() -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Music-theory helpers for sheet-music note / chord generation
+# ---------------------------------------------------------------------------
+
+_CHROMATIC = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+_FLAT_MAP  = {'Db': 'C#', 'Eb': 'D#', 'Fb': 'E', 'Gb': 'F#', 'Ab': 'G#', 'Bb': 'A#', 'Cb': 'B'}
+
+_MAJOR_SCALE    = [0, 2, 4, 5, 7, 9, 11]
+_MINOR_SCALE    = [0, 2, 3, 5, 7, 8, 10]   # natural minor
+_MAJOR_QUALS    = ['major', 'minor', 'minor', 'major', 'major', 'minor', 'diminished']
+_MINOR_QUALS    = ['minor', 'diminished', 'major', 'minor', 'minor', 'major', 'major']
+
+
+def _root_idx(root: str) -> int:
+    return _CHROMATIC.index(_FLAT_MAP.get(root, root))
+
+
+def _triad(root_idx: int, quality: str, octave: int) -> list:
+    """Return [root, third, fifth] note name strings."""
+    intervals = {'major': (0, 4, 7), 'minor': (0, 3, 7), 'diminished': (0, 3, 6)}[quality]
+    notes = []
+    for iv in intervals:
+        idx = (root_idx + iv) % 12
+        oct_bump = (root_idx + iv) // 12
+        notes.append(f"{_CHROMATIC[idx]}{octave + oct_bump}")
+    return notes
+
+
+def _extract_key(texts: list) -> tuple:
+    """Scan text for patterns like 'C# minor', 'D-flat major'. Returns (root, mode)."""
+    combined = ' '.join(texts)
+    m = re.search(r'\b([A-G][#b]?)\s+(major|minor)\b', combined, re.IGNORECASE)
+    if m:
+        return m.group(1), m.group(2).lower()
+    m = re.search(r'\b([A-G])[-\s](?:sharp|♯)\s+(major|minor)\b', combined, re.IGNORECASE)
+    if m:
+        return m.group(1) + '#', m.group(2).lower()
+    m = re.search(r'\b([A-G])[-\s](?:flat|♭)\s+(major|minor)\b', combined, re.IGNORECASE)
+    if m:
+        return m.group(1) + 'b', m.group(2).lower()
+    return None, None
+
+
+def _build_fl_layers(root: str, mode: str) -> dict:
+    """
+    Return 8 bars of chords, bass, and melody in FL Studio layer format
+    for the given key (root + 'major'/'minor').
+
+    Chord progression:
+      major → I – V – vi – IV  (each chord 2 bars)
+      minor → i – VI – III – VII
+    Melody: 32 quarter-notes (8 bars) built from scale tones at octave 4.
+    Bass:   root–root–fifth–root pattern in octave 2, 0.5-bar notes.
+    """
+    ri    = _root_idx(root)
+    scale = _MAJOR_SCALE if mode == 'major' else _MINOR_SCALE
+    quals = _MAJOR_QUALS  if mode == 'major' else _MINOR_QUALS
+
+    prog  = [0, 4, 5, 3] if mode == 'major' else [0, 5, 2, 6]  # degree indices
+
+    # Scale tones for melody (octave 4, avoids C5/D5 reserved notes)
+    scale_notes = [
+        f"{_CHROMATIC[(ri + scale[i % 7]) % 12]}4"
+        for i in range(8)
+    ]
+
+    chords_layer, bass_layer, melody_layer = [], [], []
+
+    # Melodic contours per chord (scale-degree indices, 8 quarter-notes = 2 bars)
+    contours = [
+        [0, 2, 4, 2, 1, 3, 2, 0],
+        [4, 3, 2, 4, 3, 2, 1, 4],
+        [5, 4, 3, 5, 4, 3, 2, 1],
+        [3, 2, 1, 3, 2, 0, 2, 0],
+    ]
+
+    for i, degree in enumerate(prog):
+        chord_ri   = (ri + scale[degree]) % 12
+        quality    = quals[degree]
+        chord_root = _CHROMATIC[chord_ri]
+        fifth_ri   = (chord_ri + 7) % 12
+
+        chords_layer.append({"note": _triad(chord_ri, quality, 3), "duration": 2.0})
+
+        # Bass: 8 × 0.5-bar notes per 2-bar chord block
+        for beat in range(8):
+            n = f"{_CHROMATIC[fifth_ri]}2" if beat % 4 == 2 else f"{chord_root}2"
+            bass_layer.append({"note": n, "duration": 0.5})
+
+        for idx in contours[i]:
+            melody_layer.append({"note": scale_notes[idx], "duration": 0.25})
+
+    return {"chords": chords_layer, "bass": bass_layer, "melody": melody_layer}
+
+
+# ---------------------------------------------------------------------------
 # MCP server
 # ---------------------------------------------------------------------------
 
@@ -57,6 +157,37 @@ server = Server("fl-agent")
 @server.list_tools()
 async def list_tools() -> list[types.Tool]:
     return [
+        types.Tool(
+            name="search_sheet_music",
+            description=(
+                "Search for sheet music (Musiknoten) of a given song or composition. "
+                "Queries IMSLP (the largest free sheet-music library) and Open Opus "
+                "(classical music catalogue) and returns titles, composers, genres, and "
+                "direct URLs to the scores. "
+                "Use this tool whenever the user mentions a song, piece, or composer and "
+                "wants to find, view, or reference its sheet music."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": (
+                            "Song title or composition to search for, e.g. "
+                            "'Moonlight Sonata', 'Für Elise', 'Bohemian Rhapsody'."
+                        ),
+                    },
+                    "composer": {
+                        "type": "string",
+                        "description": (
+                            "Optional composer name to narrow the search, "
+                            "e.g. 'Beethoven', 'Mozart', 'Chopin'."
+                        ),
+                    },
+                },
+                "required": ["query"],
+            },
+        ),
         types.Tool(
             name="open_fl_studio",
             description=(
@@ -215,6 +346,34 @@ async def list_tools() -> list[types.Tool]:
                     },
                 },
                 "required": ["tempo", "layers"],
+            },
+        ),
+        types.Tool(
+            name="compose_music",
+            description=(
+                "Automatically generate and play 8 bars of music (melody + chords + bass) "
+                "for a given musical key. Use this whenever the user asks you to play, compose, "
+                "or create music without specifying individual notes. "
+                "Much easier than play_song — just provide the key root and mode."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "key": {
+                        "type": "string",
+                        "description": "Key root note, e.g. 'C', 'G', 'F#', 'Bb'.",
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["major", "minor"],
+                        "description": "'major' or 'minor'.",
+                    },
+                    "tempo": {
+                        "type": "integer",
+                        "description": "Tempo in BPM (40–999). Default 120.",
+                    },
+                },
+                "required": ["key", "mode"],
             },
         ),
         # ── Transport control ─────────────────────────────────────────────────
@@ -429,9 +588,32 @@ async def call_tool(
         except Exception as exc:
             return [types.TextContent(type="text", text=f"ERROR: {exc}")]
 
+    elif name == "compose_music":
+        key    = arguments.get("key", "C").strip()
+        mode   = arguments.get("mode", "major").lower()
+        tempo  = int(arguments.get("tempo", 120))
+        if mode not in ("major", "minor"):
+            mode = "major"
+        layers = _build_fl_layers(key, mode)
+        intent = {"tempo": tempo, "layers": layers}
+        try:
+            await asyncio.get_event_loop().run_in_executor(None, _play_song, intent)
+            total = sum(len(v) for v in layers.values())
+            return [types.TextContent(
+                type="text",
+                text=f"Composed and played 8 bars in {key} {mode} at {tempo} BPM ({total} notes total).",
+            )]
+        except SystemExit as exc:
+            return [types.TextContent(type="text", text=f"MIDI error: {exc}")]
+        except Exception as exc:
+            return [types.TextContent(type="text", text=f"ERROR: {exc}")]
+
     elif name == "play_song":
         tempo  = int(arguments.get("tempo", 120))
-        layers = arguments.get("layers", {})
+        layers = arguments.get("layers") or {}
+        # If the agent forgot to include notes, fall back to C major auto-generation.
+        if not layers or all(len(v) == 0 for v in layers.values()):
+            layers = _build_fl_layers("C", "major")
         intent = {"tempo": tempo, "layers": layers}
         try:
             await asyncio.get_event_loop().run_in_executor(None, _play_song, intent)
@@ -450,7 +632,6 @@ async def call_tool(
         raw_pattern = arguments.get("melody_pattern", [])
         grid_bars = float(arguments.get("grid_bars", 0.0625))
         quantized = quantize_melody_pattern(raw_pattern, grid_bars=grid_bars)
-        import json
         return [types.TextContent(
             type="text",
             text=json.dumps({"grid_bars": grid_bars, "melody_pattern": quantized}, indent=2),
@@ -569,6 +750,131 @@ async def call_tool(
             return [types.TextContent(type="text", text=f"Channel {channel} {state}.")]
         except Exception as exc:
             return [types.TextContent(type="text", text=f"ERROR: {exc}")]
+    elif name == "search_sheet_music":
+        query    = arguments.get("query", "").strip()
+        composer = arguments.get("composer", "").strip()
+
+        if not query:
+            return [types.TextContent(type="text", text="ERROR: 'query' is required.")]
+
+        def _fetch():
+            results    = []
+            key_texts  = []           # accumulate title/snippet strings for key detection
+            search_term = f"{composer} {query}".strip() if composer else query
+
+            # ── 1. IMSLP via MediaWiki API ────────────────────────────────────
+            imslp_params = urllib.parse.urlencode({
+                "action": "query",
+                "list": "search",
+                "srsearch": search_term,
+                "srnamespace": "0",
+                "srlimit": "5",
+                "format": "json",
+            })
+            try:
+                req = urllib.request.Request(
+                    f"https://imslp.org/api.php?{imslp_params}",
+                    headers={"User-Agent": "fl-agent/1.0"},
+                )
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    data = json.loads(resp.read().decode())
+                for hit in data.get("query", {}).get("search", []):
+                    title   = hit.get("title", "")
+                    snippet = re.sub(r"<[^>]+>", "", hit.get("snippet", ""))
+                    key_texts += [title, snippet]
+                    results.append({
+                        "source": "IMSLP",
+                        "title": title,
+                        "url": (
+                            "https://imslp.org/wiki/"
+                            + urllib.parse.quote(title.replace(" ", "_"), safe="/:(),'")
+                        ),
+                        "snippet": snippet[:200],
+                    })
+            except Exception as exc:
+                results.append({"source": "IMSLP", "error": str(exc)})
+
+            # ── 2. Open Opus (classical catalogue) ────────────────────────────
+            try:
+                openopus_url = (
+                    "https://openopus.org/work/search/"
+                    + urllib.parse.quote(query)
+                    + ".json"
+                )
+                req = urllib.request.Request(
+                    openopus_url, headers={"User-Agent": "fl-agent/1.0"}
+                )
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    data = json.loads(resp.read().decode())
+                if data.get("status", {}).get("success") == "true":
+                    for work in data.get("works", [])[:4]:
+                        comp_name = work.get("composer", {}).get("complete_name", "Unknown")
+                        title     = work.get("title", "")
+                        subtitle  = work.get("subtitle", "")
+                        genre     = work.get("genre", "")
+                        key_texts += [title, subtitle]
+                        imslp_guess = (
+                            "https://imslp.org/wiki/"
+                            + urllib.parse.quote(
+                                f"{title} ({comp_name})".replace(" ", "_"), safe="/:(),',"
+                            )
+                        )
+                        results.append({
+                            "source":     "Open Opus",
+                            "title":      title,
+                            "composer":   comp_name,
+                            "genre":      genre,
+                            "imslp_url":  imslp_guess,
+                        })
+            except Exception as exc:
+                results.append({"source": "Open Opus", "error": str(exc)})
+
+            # ── 3. Derive key and build playable notes / chords ───────────────
+            root, mode = _extract_key(key_texts)
+            if root is None:
+                # Fall back to C major if no key found in the returned metadata
+                root, mode = "C", "major"
+                key_source = "default (C major — key not found in metadata)"
+            else:
+                key_source = "detected from metadata"
+
+            fl_layers = _build_fl_layers(root, mode)
+
+            return results, root, mode, key_source, fl_layers
+
+        results, root, mode, key_source, fl_layers = \
+            await asyncio.get_event_loop().run_in_executor(None, _fetch)
+
+        real_results = [r for r in results if "error" not in r]
+        if not real_results:
+            errors = "; ".join(r.get("error", "") for r in results if "error" in r)
+            return [types.TextContent(
+                type="text",
+                text=f"No sheet music found for '{query}'. API errors: {errors}",
+            )]
+
+        payload = {
+            "query":    query,
+            "composer": composer or None,
+            "results":  results,
+            "key": {
+                "root":   root,
+                "mode":   mode,
+                "source": key_source,
+            },
+            "fl_studio_layers": {
+                "description": (
+                    f"8-bar playable arrangement in {root} {mode}. "
+                    "Pass 'fl_studio_layers.layers' and a tempo to play_song."
+                ),
+                "tempo_suggestion": 120,
+                "layers": fl_layers,
+            },
+        }
+        return [types.TextContent(
+            type="text",
+            text=json.dumps(payload, indent=2, ensure_ascii=False),
+        )]
 
     return [types.TextContent(type="text", text=f"Unknown tool: {name}")]
 

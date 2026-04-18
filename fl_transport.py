@@ -226,12 +226,14 @@ class FLTransport:
 
     def start_recording(self) -> None:
         """Note 72 (C5) → FL Studio arms record and starts transport."""
-        self._send(mido.Message("note_on", note=NOTE_START_REC, velocity=self.velocity))
+        self._send(mido.Message("note_on",  note=NOTE_START_REC, velocity=self.velocity))
+        self._send(mido.Message("note_off", note=NOTE_START_REC, velocity=0))
         print("[FLTransport] Recording STARTED")
 
     def stop_recording(self) -> None:
         """Note 74 (D5) → FL Studio stops transport."""
-        self._send(mido.Message("note_on", note=NOTE_STOP_REC, velocity=self.velocity))
+        self._send(mido.Message("note_on",  note=NOTE_STOP_REC, velocity=self.velocity))
+        self._send(mido.Message("note_off", note=NOTE_STOP_REC, velocity=0))
         print("[FLTransport] Recording STOPPED")
 
     def pause_resume(self) -> None:
